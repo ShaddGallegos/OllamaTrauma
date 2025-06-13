@@ -1,138 +1,212 @@
-#!/bin/bash
+---
+- name: Ollama Management Tool
+  hosts: localhost
+  connection: local
+  gather_facts: true
 
-# Function to install/update Ollama and run Mistral
-install_and_run_mistral() {
-    # Check if Ollama is installed
-    if ! command -v ollama &> /dev/null; then
-        echo "Ollama not found. Installing..."
-        curl -fsSL https://ollama.com/install.sh | sh
-    else
-        echo "Updating Ollama..."
-        ollama update
-    fi
+  vars_prompt:
+    - name: main_choice
+      prompt: |
+        ===== Ollama Management Tool =====
+        1) Install/Update and Run Mistral
+        2) Import Model from Hugging Face
+        3) Advanced LLM Operations
+        4) Exit
+        ==================================
+        Enter your choice (1-4)
+      private: false
 
-    # Pull the latest Mistral model if not already available
-    if ! ollama list | grep -q "mistral"; then
-        echo "Downloading Mistral model..."
-        ollama pull mistral
-    fi
+  pre_tasks:
+    - name: Exit if chosen
+      meta: end_play
+      when: main_choice == "4"
 
-    # Run the model
-    echo "Starting the Mistral LLM..."
-    ollama run mistral
-}
+  tasks:
+    - name: Run Install/Update Mistral tasks
+      when: main_choice == "1"
+      block:
+        - name: Check if Ollama is installed
+          command: which ollama
+          register: ollama_check
+          failed_when: false
+          changed_when: false
 
-# Function to import model from Hugging Face
-import_huggingface_model() {
-    # Prompt user for the Hugging Face model URL
-    read -p "Enter Hugging Face model URL (e.g., hf.co/Ansible-Model/santacoder-finetuned-alanstack-ec2): " model_url
+        - name: Install Ollama
+          shell: curl -fsSL https://ollama.com/install.sh | sh
+          args:
+            executable: /bin/bash
+          when: ollama_check.rc != 0
+          register: ollama_install
 
-    # Extract model name
-    model_name=$(basename "$model_url")
+        - name: Update Ollama
+          command: ollama update
+          when: ollama_check.rc == 0
+          register: ollama_update
 
-    # Install Git LFS if needed
-    echo "Ensuring Git LFS is installed..."
-    git lfs install
+        - name: List available models
+          command: ollama list
+          register: model_list
+          changed_when: false
 
-    # Clone the model repository
-    echo "Cloning the model repository..."
-    git clone "https://huggingface.co/$model_url"
+        - name: Pull Mistral model
+          command: ollama pull mistral
+          when: "'mistral' not in model_list.stdout"
+          register: model_pull
 
-    # Navigate into model directory
-    cd "$model_name" || { echo "Model folder not found"; exit 1; }
+        - name: Run Mistral model
+          command: ollama run mistral
+          async: 0
+          poll: 0
+          register: ollama_run
 
-    # Find GGUF model file
-    gguf_file=$(ls | grep ".gguf" | head -n 1)
+        - name: Display info about Mistral running
+          debug:
+            msg: "Mistral is now running. Connect to it using your client."
 
-    # Check if a GGUF file exists
-    if [ -z "$gguf_file" ]; then
-        echo "No GGUF file found in the repository. Make sure the model supports GGUF format."
-        return 1
-    fi
+    - name: Import model from Hugging Face
+      when: main_choice == "2"
+      block:
+        - name: Prompt for Hugging Face model URL
+          vars_prompt:
+            - name: model_url
+              prompt: "Enter Hugging Face model URL (e.g., hf.co/Ansible-Model/santacoder-finetuned-alanstack-ec2)"
+              private: false
+          register: model_url_input
 
-    # Create the Modelfile
-    echo "Creating Modelfile..."
-    cat > Modelfile <<EOF
-FROM "./$gguf_file"
-TEMPLATE """
-<|system|> {{ .System }} <|end|>
-<|user|> {{ .Prompt }} <|end|>
-<|assistant|> {{ .Response }} <|end|>
-"""
-EOF
+        - name: Extract model name
+          set_fact:
+            model_name: "{{ model_url.split('/')[-1] }}"
 
-    # Build the model in Ollama
-    echo "Building the model in Ollama..."
-    ollama create "$model_name" -f Modelfile
+        - name: Install Git LFS
+          command: git lfs install
+          changed_when: false
 
-    # Run the model
-    echo "Starting the model..."
-    ollama run "$model_name"
-}
+        - name: Clone model repository
+          git:
+            repo: "https://huggingface.co/{{ model_url }}"
+            dest: "/tmp/{{ model_name }}"
+            force: yes
+          register: git_clone
 
-# Function for advanced LLM operations
-advanced_llm_operations() {
-    echo "Select an option:"
-    echo "1) Fine-tune an LLM with a dataset"
-    echo "2) Use embeddings for retrieval (RAG)"
-    echo "3) Fine-tune an LLM in Ollama"
-    read -p "Enter choice (1/2/3): " choice
+        - name: Find GGUF model files
+          find:
+            paths: "/tmp/{{ model_name }}"
+            patterns: "*.gguf"
+          register: gguf_files
 
-    if [ "$choice" -eq 1 ]; then
-        # Fine-tuning the LLM
-        read -p "Enter model name (e.g., mistral): " model_name
-        read -p "Enter dataset file (e.g., my_dataset.json): " dataset
+        - name: Check if GGUF files exist
+          fail:
+            msg: "No GGUF file found in the repository. Make sure the model supports GGUF format."
+          when: gguf_files.matched == 0
 
-        echo "Running fine-tuning process..."
-        python train.py --model "$model_name" --data "$dataset" --epochs 3
+        - name: Set GGUF file name
+          set_fact:
+            gguf_file: "{{ gguf_files.files[0].path | basename }}"
 
-    elif [ "$choice" -eq 2 ]; then
-        # Using embeddings for RAG
-        echo "Setting up retrieval-augmented generation..."
-        read -p "Enter text data for embedding: " text_data
+        - name: Create Modelfile
+          copy:
+            dest: "/tmp/{{ model_name }}/Modelfile"
+            content: |
+              FROM "./{{ gguf_file }}"
+              TEMPLATE """
+              <|system|> {{ '{{' }} .System {{ '}}' }} <|end|>
+              <|user|> {{ '{{' }} .Prompt {{ '}}' }} <|end|>
+              <|assistant|> {{ '{{' }} .Response {{ '}}' }} <|end|>
+              """
 
-        python -c "
-from sentence_transformers import SentenceTransformer
-model = SentenceTransformer('all-MiniLM-L6-v2')
-embedding = model.encode(\"$text_data\")
-print('Embedding created:', embedding)
-"
+        - name: Build model in Ollama
+          command: ollama create "{{ model_name }}" -f Modelfile
+          args:
+            chdir: "/tmp/{{ model_name }}"
+          register: ollama_create
 
-    elif [ "$choice" -eq 3 ]; then
-        # Fine-tuning an LLM with Ollama
-        read -p "Enter dataset file (e.g., my_dataset.json): " dataset
+        - name: Run the model
+          command: ollama run "{{ model_name }}"
+          async: 0
+          poll: 0
+          register: ollama_model_run
 
-        echo "Fine-tuning model in Ollama..."
-        ollama finetune mistral --data "$dataset" --output fine_tuned_model.gguf
+        - name: Display information about running model
+          debug:
+            msg: "{{ model_name }} is now running. Connect to it using your client."
 
-    else
-        echo "Invalid choice."
-    fi
-}
+    - name: Advanced LLM Operations 
+      when: main_choice == "3"
+      block:
+        - name: Prompt for advanced operation choice
+          vars_prompt:
+            - name: advanced_choice
+              prompt: |
+                Select an option:
+                1) Fine-tune an LLM with a dataset
+                2) Use embeddings for retrieval (RAG)
+                3) Fine-tune an LLM in Ollama
+                Enter choice (1/2/3)
+              private: false
 
-# Main function with menu
-main() {
-    clear
-    echo "===== Ollama Management Tool ====="
-    echo "1) Install/Update and Run Mistral"
-    echo "2) Import Model from Hugging Face"
-    echo "3) Advanced LLM Operations"
-    echo "4) Exit"
-    echo "=================================="
-    read -p "Enter your choice (1-4): " main_choice
+        - name: Fine-tune LLM with dataset
+          when: advanced_choice == "1"
+          block:
+            - name: Prompt for model name
+              vars_prompt:
+                - name: model_name
+                  prompt: "Enter model name (e.g., mistral)"
+                  private: false
 
-    case $main_choice in
-        1) install_and_run_mistral ;;
-        2) import_huggingface_model ;;
-        3) advanced_llm_operations ;;
-        4) echo "Exiting..."; exit 0 ;;
-        *) echo "Invalid option. Please try again."; main ;;
-    esac
-    
-    # Return to main menu after function completes
-    read -p "Press Enter to return to main menu..."
-    main
-}
+            - name: Prompt for dataset file
+              vars_prompt:
+                - name: dataset
+                  prompt: "Enter dataset file (e.g., my_dataset.json)"
+                  private: false
 
-# Start the script
-main
+            - name: Run fine-tuning process
+              command: python train.py --model "{{ model_name }}" --data "{{ dataset }}" --epochs 3
+              register: finetune_output
+
+            - name: Display fine-tuning output
+              debug:
+                var: finetune_output.stdout_lines
+
+        - name: Use embeddings for RAG
+          when: advanced_choice == "2"
+          block:
+            - name: Prompt for text data
+              vars_prompt:
+                - name: text_data
+                  prompt: "Enter text data for embedding"
+                  private: false
+
+            - name: Generate embedding
+              pip:
+                name: sentence-transformers
+                state: present
+
+            - name: Create embedding
+              command: >
+                python -c "
+                from sentence_transformers import SentenceTransformer;
+                model = SentenceTransformer('all-MiniLM-L6-v2');
+                embedding = model.encode('{{ text_data }}');
+                print('Embedding created:', embedding)"
+              register: embedding_output
+
+            - name: Display embedding output
+              debug:
+                var: embedding_output.stdout_lines
+
+        - name: Fine-tune LLM in Ollama
+          when: advanced_choice == "3"
+          block:
+            - name: Prompt for dataset file
+              vars_prompt:
+                - name: dataset
+                  prompt: "Enter dataset file (e.g., my_dataset.json)"
+                  private: false
+
+            - name: Fine-tune model in Ollama
+              command: ollama finetune mistral --data "{{ dataset }}" --output fine_tuned_model.gguf
+              register: ollama_finetune
+
+            - name: Display fine-tuning output
+              debug:
+                var: ollama_finetune.stdout_lines
