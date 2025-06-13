@@ -5,8 +5,20 @@ A comprehensive bash script for managing Ollama LLM deployments, including insta
 
 ## Features
 
+- **Menu**
+```
+===== Ollama Management Tool =====
+1) Install/Update and Run Mistral
+2) Import Model from Hugging Face
+3) Advanced LLM Operations (Train The Model, Fine-tune)
+4) Exit
+==================================
+Enter your choice (1-4):
+```
 - **Installation & Updates**: Easily install or update Ollama and run the Mistral model
+
 - **Hugging Face Integration**: Import models directly from Hugging Face repositories
+
 - **Advanced LLM Operations**:
   - Fine-tune models with custom datasets
   - Implement Retrieval Augmented Generation (RAG)
