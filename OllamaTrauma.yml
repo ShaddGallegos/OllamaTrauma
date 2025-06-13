@@ -39,9 +39,16 @@
           register: ollama_install
 
         - name: Update Ollama
-          command: ollama update
+          shell: |
+            if ollama -h | grep -q "update"; then
+              ollama update
+            else
+              echo "Update command not available in this version of Ollama"
+            fi
           when: ollama_check.rc == 0
           register: ollama_update
+          changed_when: false
+          failed_when: false
 
         - name: List available models
           command: ollama list
@@ -61,21 +68,32 @@
 
         - name: Display info about Mistral running
           debug:
-            msg: "Mistral is now running. Connect to it using your client."
+            msg: 
+              - "✅ MISTRAL IS NOW RUNNING!"
+              - "=================================="
+              - " "
+              - "CONNECT TO"
+              - "The Ollama CLI:"
+              - "   ollama run mistral"
+              - "DISCONNECT FROM:"
+              - "   /bye or /exit"
+              - "TO SHUT IT DOWN:"
+              - "   ollama stop mistral"
+              - " "
+              - "=================================="
 
     - name: Import model from Hugging Face
       when: main_choice == "2"
       block:
         - name: Prompt for Hugging Face model URL
-          vars_prompt:
-            - name: model_url
-              prompt: "Enter Hugging Face model URL (e.g., hf.co/Ansible-Model/santacoder-finetuned-alanstack-ec2)"
-              private: false
+          pause:
+            prompt: "Enter Hugging Face model URL (e.g., hf.co/Ansible-Model/santacoder-finetuned-alanstack-ec2)"
           register: model_url_input
 
-        - name: Extract model name
+        - name: Set model variables
           set_fact:
-            model_name: "{{ model_url.split('/')[-1] }}"
+            model_url: "{{ model_url_input.user_input }}"
+            model_name: "{{ model_url_input.user_input.split('/')[-1] }}"
 
         - name: Install Git LFS
           command: git lfs install
@@ -126,41 +144,34 @@
           poll: 0
           register: ollama_model_run
 
-        - name: Display information about running model
-          debug:
-            msg: "{{ model_name }} is now running. Connect to it using your client."
-
     - name: Advanced LLM Operations 
       when: main_choice == "3"
       block:
         - name: Prompt for advanced operation choice
-          vars_prompt:
-            - name: advanced_choice
-              prompt: |
-                Select an option:
-                1) Fine-tune an LLM with a dataset
-                2) Use embeddings for retrieval (RAG)
-                3) Fine-tune an LLM in Ollama
-                Enter choice (1/2/3)
-              private: false
+          pause:
+            prompt: |
+              Select an option:
+              1) Fine-tune an LLM with a dataset
+              2) Use embeddings for retrieval (RAG)
+              3) Fine-tune an LLM in Ollama
+              Enter choice (1/2/3)
+          register: advanced_choice_input
 
         - name: Fine-tune LLM with dataset
-          when: advanced_choice == "1"
+          when: advanced_choice_input.user_input == "1"
           block:
             - name: Prompt for model name
-              vars_prompt:
-                - name: model_name
-                  prompt: "Enter model name (e.g., mistral)"
-                  private: false
+              pause:
+                prompt: "Enter model name (e.g., mistral)"
+              register: model_name_input
 
             - name: Prompt for dataset file
-              vars_prompt:
-                - name: dataset
-                  prompt: "Enter dataset file (e.g., my_dataset.json)"
-                  private: false
+              pause:
+                prompt: "Enter dataset file (e.g., my_dataset.json)"
+              register: dataset_input
 
             - name: Run fine-tuning process
-              command: python train.py --model "{{ model_name }}" --data "{{ dataset }}" --epochs 3
+              command: python train.py --model "{{ model_name_input.user_input }}" --data "{{ dataset_input.user_input }}" --epochs 3
               register: finetune_output
 
             - name: Display fine-tuning output
@@ -168,15 +179,14 @@
                 var: finetune_output.stdout_lines
 
         - name: Use embeddings for RAG
-          when: advanced_choice == "2"
+          when: advanced_choice_input.user_input == "2"
           block:
             - name: Prompt for text data
-              vars_prompt:
-                - name: text_data
-                  prompt: "Enter text data for embedding"
-                  private: false
+              pause:
+                prompt: "Enter text data for embedding"
+              register: text_data_input
 
-            - name: Generate embedding
+            - name: Install sentence-transformers
               pip:
                 name: sentence-transformers
                 state: present
@@ -186,7 +196,7 @@
                 python -c "
                 from sentence_transformers import SentenceTransformer;
                 model = SentenceTransformer('all-MiniLM-L6-v2');
-                embedding = model.encode('{{ text_data }}');
+                embedding = model.encode('{{ text_data_input.user_input }}');
                 print('Embedding created:', embedding)"
               register: embedding_output
 
@@ -195,16 +205,15 @@
                 var: embedding_output.stdout_lines
 
         - name: Fine-tune LLM in Ollama
-          when: advanced_choice == "3"
+          when: advanced_choice_input.user_input == "3"
           block:
             - name: Prompt for dataset file
-              vars_prompt:
-                - name: dataset
-                  prompt: "Enter dataset file (e.g., my_dataset.json)"
-                  private: false
+              pause:
+                prompt: "Enter dataset file (e.g., my_dataset.json)"
+              register: dataset_input
 
             - name: Fine-tune model in Ollama
-              command: ollama finetune mistral --data "{{ dataset }}" --output fine_tuned_model.gguf
+              command: ollama finetune mistral --data "{{ dataset_input.user_input }}" --output fine_tuned_model.gguf
               register: ollama_finetune
 
             - name: Display fine-tuning output
