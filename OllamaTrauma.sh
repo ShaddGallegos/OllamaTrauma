@@ -807,7 +807,7 @@ main() {
     reset
     echo "===== Ollama Management Tool ====="
     echo "1) Install/Update and Run Model (Current: $SELECTED_MODEL)"
-    echo "2) Import Model from Hugging Face"
+    echo "2) Import/Search for a Model from Huggingace.co"
     echo "3) Advanced LLM Operations (Train The Model, Fine-tune)"
     echo "4) Delete Models"
     echo "5) Exit"
