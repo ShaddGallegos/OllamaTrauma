@@ -201,7 +201,7 @@ import_huggingface_model() {
     reset  # Added reset command to clear screen before showing submenu
     echo "===== Hugging Face Model Import ====="
     echo "1) Browse popular GGUF models"
-    echo "2) Search for specific models"
+    echo "2) Search for specific models (Keywords or Tags)"
     echo "3) Enter model URL manually"
     echo "4) Return to main menu"
     echo "=================================="
