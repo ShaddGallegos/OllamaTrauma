@@ -3,13 +3,15 @@
 
 A comprehensive bash script for managing Ollama LLM deployments, including installation, model management, and fine-tuning capabilities.
 
+I made this as an ansible demo the bash script has more menu features the tml file needs a little mod depending which model you want to install and isnt menu driven, but still cool! 
+
 ## Features
 
 - **Menu**
 ```
 ===== Ollama Management Tool =====
 1) Install/Update and Run Mistral
-2) Import Model from Hugging Face
+2) Import Model from Huggingface.co
 3) Advanced LLM Operations (Train The Model, Fine-tune)
 4) Exit
 ==================================
@@ -56,7 +58,7 @@ Run the script:
 
 1. **Install/Update and Run Mistral**
    - Checks if Ollama is installed, installs it if needed
-   - Downloads the Mistral model if not available
+   - Downloads the Mistral model if not available local already
    - Runs the Mistral LLM
 
 2. **Import Model from Hugging Face**
