@@ -3,39 +3,238 @@
 # Global variables
 SELECTED_MODEL="mistral"
 
+# Function to detect operating system
+detect_os() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        OS="macos"
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        OS="linux"
+    elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "win32" ]]; then
+        OS="windows"
+    elif [[ -n "$WSL_DISTRO_NAME" ]] || [[ -n "$WSLENV" ]]; then
+        OS="wsl"  # Windows Subsystem for Linux
+    else
+        # Additional Windows detection methods
+        if command -v powershell.exe &> /dev/null || command -v cmd.exe &> /dev/null; then
+            OS="windows"
+        elif [[ -f "/proc/version" ]] && grep -q "Microsoft\|WSL" /proc/version 2>/dev/null; then
+            OS="wsl"
+        else
+            OS="unknown"
+        fi
+    fi
+}
+
 # Function to check and install dependencies
 check_dependencies() {
     echo "Checking for required dependencies..."
+    
+    # Detect OS first
+    detect_os
     
     # Check if jq is installed
     if ! command -v jq &> /dev/null; then
         echo "jq not found. Installing..."
         
-        # Check for different package managers
-        if command -v dnf &> /dev/null; then
-            sudo dnf install -y jq
-        elif command -v apt &> /dev/null; then
-            sudo apt update && sudo apt install -y jq
-        elif command -v yum &> /dev/null; then
-            sudo yum install -y jq
-        else
-            echo "WARNING: Could not install jq. Package manager not found."
-            echo "Please install jq manually for better JSON parsing."
-        fi
+        case $OS in
+            macos)
+                # macOS installation methods
+                if command -v brew &> /dev/null; then
+                    echo "Using Homebrew to install jq..."
+                    brew install jq
+                elif command -v port &> /dev/null; then
+                    echo "Using MacPorts to install jq..."
+                    sudo port install jq
+                else
+                    echo "WARNING: Neither Homebrew nor MacPorts found."
+                    echo "Please install jq manually:"
+                    echo "1. Install Homebrew: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+                    echo "2. Then run: brew install jq"
+                    echo "Or download from: https://github.com/jqlang/jq/releases"
+                fi
+                ;;
+            linux)
+                # Linux installation methods
+                if command -v dnf &> /dev/null; then
+                    sudo dnf install -y jq
+                elif command -v apt &> /dev/null; then
+                    sudo apt update && sudo apt install -y jq
+                elif command -v yum &> /dev/null; then
+                    sudo yum install -y jq
+                elif command -v pacman &> /dev/null; then
+                    sudo pacman -S jq
+                elif command -v zypper &> /dev/null; then
+                    sudo zypper install jq
+                else
+                    echo "WARNING: Could not install jq. Package manager not found."
+                    echo "Please install jq manually for better JSON parsing."
+                fi
+                ;;
+            windows)
+                # Windows installation methods
+                if command -v winget &> /dev/null; then
+                    echo "Using winget to install jq..."
+                    winget install jqlang.jq
+                elif command -v choco &> /dev/null; then
+                    echo "Using Chocolatey to install jq..."
+                    choco install jq
+                elif command -v scoop &> /dev/null; then
+                    echo "Using Scoop to install jq..."
+                    scoop install jq
+                else
+                    echo "WARNING: No Windows package manager found (winget, choco, scoop)."
+                    echo "Please install jq manually:"
+                    echo "1. Download from: https://github.com/jqlang/jq/releases"
+                    echo "2. Or install Chocolatey: https://chocolatey.org/install"
+                    echo "3. Then run: choco install jq"
+                fi
+                ;;
+            wsl)
+                # WSL uses Linux package managers
+                echo "Detected WSL environment. Using Linux package managers..."
+                if command -v apt &> /dev/null; then
+                    sudo apt update && sudo apt install -y jq
+                elif command -v dnf &> /dev/null; then
+                    sudo dnf install -y jq
+                elif command -v yum &> /dev/null; then
+                    sudo yum install -y jq
+                elif command -v pacman &> /dev/null; then
+                    sudo pacman -S jq
+                elif command -v zypper &> /dev/null; then
+                    sudo zypper install jq
+                else
+                    echo "WARNING: Could not install jq. Package manager not found."
+                    echo "Please install jq manually for better JSON parsing."
+                fi
+                ;;
+            *)
+                echo "WARNING: Unknown operating system. Please install jq manually."
+                echo "Visit: https://github.com/jqlang/jq/releases"
+                ;;
+        esac
     else
         echo "jq is already installed."
     fi
+    
+    # Check if git is installed (required for cloning models)
+    if ! command -v git &> /dev/null; then
+        echo "git not found. Installing..."
+        
+        case $OS in
+            macos)
+                echo "On macOS, git is usually installed with Xcode Command Line Tools."
+                echo "Run: xcode-select --install"
+                echo "Or install via Homebrew: brew install git"
+                ;;
+            linux)
+                if command -v dnf &> /dev/null; then
+                    sudo dnf install -y git
+                elif command -v apt &> /dev/null; then
+                    sudo apt update && sudo apt install -y git
+                elif command -v yum &> /dev/null; then
+                    sudo yum install -y git
+                elif command -v pacman &> /dev/null; then
+                    sudo pacman -S git
+                elif command -v zypper &> /dev/null; then
+                    sudo zypper install git
+                else
+                    echo "WARNING: Could not install git. Please install manually."
+                fi
+                ;;
+            windows)
+                if command -v winget &> /dev/null; then
+                    echo "Using winget to install git..."
+                    winget install Git.Git
+                elif command -v choco &> /dev/null; then
+                    echo "Using Chocolatey to install git..."
+                    choco install git
+                elif command -v scoop &> /dev/null; then
+                    echo "Using Scoop to install git..."
+                    scoop install git
+                else
+                    echo "WARNING: No Windows package manager found."
+                    echo "Please install Git manually:"
+                    echo "1. Download from: https://git-scm.com/download/win"
+                    echo "2. Or install Chocolatey: https://chocolatey.org/install"
+                    echo "3. Then run: choco install git"
+                fi
+                ;;
+            wsl)
+                echo "Detected WSL environment. Using Linux package managers..."
+                if command -v apt &> /dev/null; then
+                    sudo apt update && sudo apt install -y git
+                elif command -v dnf &> /dev/null; then
+                    sudo dnf install -y git
+                elif command -v yum &> /dev/null; then
+                    sudo yum install -y git
+                elif command -v pacman &> /dev/null; then
+                    sudo pacman -S git
+                elif command -v zypper &> /dev/null; then
+                    sudo zypper install git
+                else
+                    echo "WARNING: Could not install git. Please install manually."
+                fi
+                ;;
+        esac
+    else
+        echo "git is already installed."
+    fi
 }
-
-# Run the dependency check at startup
-check_dependencies
 
 # Function to install/update Ollama and run selected model
 install_and_run_model() {
+    # Detect OS
+    detect_os
+    
     # Check if Ollama is installed
     if ! command -v ollama &> /dev/null; then
         echo "Ollama not found. Installing..."
-        curl -fsSL https://ollama.com/install.sh | sh
+        
+        case $OS in
+            macos)
+                echo "Installing Ollama on macOS..."
+                if command -v brew &> /dev/null; then
+                    echo "Using Homebrew to install Ollama..."
+                    brew install ollama
+                    # Start Ollama service on macOS
+                    brew services start ollama
+                else
+                    echo "Using official installer..."
+                    curl -fsSL https://ollama.com/install.sh | sh
+                fi
+                ;;
+            linux)
+                echo "Installing Ollama on Linux..."
+                curl -fsSL https://ollama.com/install.sh | sh
+                ;;
+            windows)
+                echo "Installing Ollama on Windows..."
+                if command -v winget &> /dev/null; then
+                    echo "Using winget to install Ollama..."
+                    winget install Ollama.Ollama
+                elif command -v choco &> /dev/null; then
+                    echo "Using Chocolatey to install Ollama..."
+                    choco install ollama
+                else
+                    echo "Please install Ollama manually:"
+                    echo "1. Download from: https://ollama.com/download/windows"
+                    echo "2. Or install a package manager first:"
+                    echo "   - Chocolatey: https://chocolatey.org/install"
+                    echo "   - Scoop: https://scoop.sh/"
+                    echo "   - Winget: Built into Windows 10/11"
+                    echo "3. Then run: choco install ollama"
+                fi
+                ;;
+            wsl)
+                echo "Installing Ollama on WSL..."
+                echo "Note: Ollama will run in WSL but may need additional setup for GPU access."
+                curl -fsSL https://ollama.com/install.sh | sh
+                ;;
+            *)
+                echo "Unknown OS. Trying generic installation..."
+                curl -fsSL https://ollama.com/install.sh | sh
+                ;;
+        esac
     else
         echo "Checking Ollama version..."
         OLLAMA_VERSION=$(ollama --version 2>/dev/null || echo "Unknown")
@@ -47,7 +246,30 @@ install_and_run_model() {
             ollama update
         else
             echo "Note: This version of Ollama doesn't support the update command."
-            echo "You can update manually by reinstalling: curl -fsSL https://ollama.com/install.sh | sh"
+            case $OS in
+                macos)
+                    if command -v brew &> /dev/null; then
+                        echo "You can update via Homebrew: brew upgrade ollama"
+                    else
+                        echo "You can update manually by reinstalling: curl -fsSL https://ollama.com/install.sh | sh"
+                    fi
+                    ;;
+                linux)
+                    echo "You can update manually by reinstalling: curl -fsSL https://ollama.com/install.sh | sh"
+                    ;;
+                windows)
+                    if command -v winget &> /dev/null; then
+                        echo "You can update via winget: winget upgrade Ollama.Ollama"
+                    elif command -v choco &> /dev/null; then
+                        echo "You can update via Chocolatey: choco upgrade ollama"
+                    else
+                        echo "You can update manually by downloading from: https://ollama.com/download/windows"
+                    fi
+                    ;;
+                wsl)
+                    echo "You can update manually by reinstalling: curl -fsSL https://ollama.com/install.sh | sh"
+                    ;;
+            esac
         fi
     fi
 
@@ -196,9 +418,21 @@ install_and_run_model() {
     fi
 }
 
+# Function to clear screen (cross-platform)
+clear_screen() {
+    if command -v clear &> /dev/null; then
+        clear
+    elif command -v reset &> /dev/null; then
+        reset
+    else
+        # Fallback for systems without clear or reset
+        printf '\033[2J\033[H'
+    fi
+}
+
 # Function to import model from Hugging Face
 import_huggingface_model() {
-    reset  # Added reset command to clear screen before showing submenu
+    clear_screen  # Use cross-platform clear function
     echo "===== Hugging Face Model Import ====="
     echo "1) Browse popular GGUF models"
     echo "2) Search for specific models (Keywords or Tags)"
@@ -210,17 +444,17 @@ import_huggingface_model() {
     case $hf_choice in
         1) 
             # List popular GGUF models
-            reset
+            clear_screen
             list_popular_gguf_models
             ;;
         2)
             # Search for models
-            reset
+            clear_screen
             search_huggingface_models
             ;;
         3)
             # Manual URL entry
-            reset
+            clear_screen
             manual_model_entry
             ;;
         4)
@@ -241,21 +475,21 @@ list_popular_gguf_models() {
     
     if command -v jq &> /dev/null; then
         # Get popular GGUF models
-        curl -s "https://huggingface.co/api/models?search=gguf&sort=downloads&direction=-1&limit=20" | \
+        GGUF_MODELS_JSON=$(curl -s "https://huggingface.co/api/models?search=gguf&sort=downloads&direction=-1&limit=20" | \
         jq -r '[.[] | select(
             (.modelId | ascii_downcase | contains("gguf")) or
             (.tags | join(",") | ascii_downcase | contains("gguf"))
-        )]' > /tmp/gguf_models.json
+        )]')
         
         # Count results
-        COUNT=$(jq 'length' /tmp/gguf_models.json 2>/dev/null || echo "0")
+        COUNT=$(echo "$GGUF_MODELS_JSON" | jq 'length' 2>/dev/null || echo "0")
         
         if [ "$COUNT" -gt 0 ]; then
             echo "Found $COUNT popular GGUF models"
             echo "-----------------------------------"
             
             # Display numbered list of models
-            jq -r 'to_entries | .[] | "\(.key+1)) \(.value.modelId) - \(.value.downloads) downloads"' /tmp/gguf_models.json
+            echo "$GGUF_MODELS_JSON" | jq -r 'to_entries | .[] | "\(.key+1)) \(.value.modelId) - \(.value.downloads) downloads"'
             
             echo "-----------------------------------"
             echo "$((COUNT+1))) Return to Hugging Face menu"
@@ -269,7 +503,7 @@ list_popular_gguf_models() {
                 import_huggingface_model
             elif [ "$model_choice" -ge 1 ] && [ "$model_choice" -le $COUNT ]; then
                 # Get selected model ID
-                SELECTED_MODEL_ID=$(jq -r ".[$((model_choice-1))].modelId" /tmp/gguf_models.json)
+                SELECTED_MODEL_ID=$(echo "$GGUF_MODELS_JSON" | jq -r ".[$((model_choice-1))].modelId")
                 echo "Selected model: $SELECTED_MODEL_ID"
                 
                 # Import the selected model
@@ -279,9 +513,6 @@ list_popular_gguf_models() {
                 sleep 1
                 list_popular_gguf_models
             fi
-            
-            # Clean up
-            rm -f /tmp/gguf_models.json
         else
             echo "Failed to fetch models. Please try another method."
             sleep 2
@@ -335,6 +566,19 @@ import_direct_url() {
 
     # Extract model name
     model_name=$(basename "$model_url")
+    
+    # Check if we have write permissions in current directory
+    if ! touch test_write_permissions 2>/dev/null; then
+        echo "⚠️  Warning: No write permissions in current directory: $(pwd)"
+        echo "⚠️  This may cause issues during model import."
+        read -p "Continue anyway? (y/n): " continue_no_write
+        if [[ "$continue_no_write" != "y" && "$continue_no_write" != "Y" ]]; then
+            echo "Import cancelled."
+            return 1
+        fi
+    else
+        rm -f test_write_permissions 2>/dev/null
+    fi
 
     # Check if directory already exists (from previous interrupted attempt)
     if [ -d "$model_name" ]; then
@@ -365,6 +609,78 @@ import_direct_url() {
     if [ ! -d "$model_name" ]; then
         # Install Git LFS if needed
         echo "Ensuring Git LFS is installed..."
+        
+        # Check if Git LFS is already installed
+        if ! command -v git-lfs &> /dev/null; then
+            echo "Git LFS not found. Installing..."
+            
+            case $OS in
+                macos)
+                    if command -v brew &> /dev/null; then
+                        echo "Installing Git LFS via Homebrew..."
+                        brew install git-lfs
+                    else
+                        echo "Please install Git LFS manually:"
+                        echo "1. Install Homebrew: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+                        echo "2. Then run: brew install git-lfs"
+                        echo "Or download from: https://git-lfs.github.io/"
+                    fi
+                    ;;
+                linux)
+                    if command -v dnf &> /dev/null; then
+                        sudo dnf install -y git-lfs
+                    elif command -v apt &> /dev/null; then
+                        sudo apt update && sudo apt install -y git-lfs
+                    elif command -v yum &> /dev/null; then
+                        sudo yum install -y git-lfs
+                    elif command -v pacman &> /dev/null; then
+                        sudo pacman -S git-lfs
+                    elif command -v zypper &> /dev/null; then
+                        sudo zypper install git-lfs
+                    else
+                        echo "WARNING: Could not install Git LFS automatically."
+                        echo "Please install Git LFS manually: https://git-lfs.github.io/"
+                    fi
+                    ;;
+                windows)
+                    if command -v winget &> /dev/null; then
+                        echo "Installing Git LFS via winget..."
+                        winget install GitHub.GitLFS
+                    elif command -v choco &> /dev/null; then
+                        echo "Installing Git LFS via Chocolatey..."
+                        choco install git-lfs
+                    elif command -v scoop &> /dev/null; then
+                        echo "Installing Git LFS via Scoop..."
+                        scoop install git-lfs
+                    else
+                        echo "WARNING: No Windows package manager found."
+                        echo "Please install Git LFS manually:"
+                        echo "1. Download from: https://git-lfs.github.io/"
+                        echo "2. Or install Chocolatey: https://chocolatey.org/install"
+                        echo "3. Then run: choco install git-lfs"
+                    fi
+                    ;;
+                wsl)
+                    echo "Detected WSL environment. Installing Git LFS..."
+                    if command -v apt &> /dev/null; then
+                        sudo apt update && sudo apt install -y git-lfs
+                    elif command -v dnf &> /dev/null; then
+                        sudo dnf install -y git-lfs
+                    elif command -v yum &> /dev/null; then
+                        sudo yum install -y git-lfs
+                    elif command -v pacman &> /dev/null; then
+                        sudo pacman -S git-lfs
+                    elif command -v zypper &> /dev/null; then
+                        sudo zypper install git-lfs
+                    else
+                        echo "WARNING: Could not install Git LFS automatically."
+                        echo "Please install Git LFS manually: https://git-lfs.github.io/"
+                    fi
+                    ;;
+            esac
+        fi
+        
+        # Initialize Git LFS
         git lfs install
         
         # Show warning for large models
@@ -449,10 +765,25 @@ import_direct_url() {
     fi
     
     # Check file size to ensure it was properly downloaded
-    file_size=$(du -h "$gguf_file" | cut -f1)
-    echo "GGUF file size: $file_size"
+    if command -v stat &> /dev/null; then
+        # Use stat command (more reliable on both systems)
+        if [[ "$OS" == "macos" ]]; then
+            file_size=$(stat -f%z "$gguf_file" 2>/dev/null || echo "0")
+            file_size_human=$(du -h "$gguf_file" | cut -f1)
+        else
+            file_size=$(stat -c%s "$gguf_file" 2>/dev/null || echo "0")
+            file_size_human=$(du -h "$gguf_file" | cut -f1)
+        fi
+    else
+        # Fallback to du command
+        file_size_human=$(du -h "$gguf_file" | cut -f1)
+        file_size="unknown"
+    fi
     
-    if [[ "$file_size" == *"K"* ]] || [[ "$file_size" == "0"* ]]; then
+    echo "GGUF file size: $file_size_human"
+    
+    # Check if file size is suspiciously small (less than 1MB or only KB)
+    if [[ "$file_size_human" == *"K"* ]] || [[ "$file_size_human" == "0"* ]] || [[ "$file_size" != "unknown" && "$file_size" -lt 1048576 ]]; then
         echo "⚠️ Warning: File size appears very small for a GGUF model."
         echo "This might indicate an incomplete download."
         read -p "Continue anyway? (y/n): " continue_small
@@ -465,7 +796,7 @@ import_direct_url() {
 
     # Create the Modelfile
     echo "Creating Modelfile..."
-    cat > Modelfile <<EOF
+    if ! cat > Modelfile <<EOF
 FROM "./$gguf_file"
 TEMPLATE """
 <|system|> {{ .System }} <|end|>
@@ -473,10 +804,60 @@ TEMPLATE """
 <|assistant|> {{ .Response }} <|end|>
 """
 EOF
+    then
+        echo "Error: Could not create Modelfile. Check write permissions in current directory."
+        echo "Current directory: $(pwd)"
+        echo "Trying to create Modelfile in /tmp instead..."
+        
+        # Try creating in /tmp as fallback
+        case $OS in
+            macos)
+                TEMP_DIR="${TMPDIR:-/tmp}"
+                ;;
+            windows)
+                TEMP_DIR="${TEMP:-${TMP:-/tmp}}"
+                ;;
+            wsl)
+                TEMP_DIR="${TMPDIR:-/tmp}"
+                ;;
+            *)
+                TEMP_DIR="/tmp"
+                ;;
+        esac
+        
+        MODELFILE_PATH="$TEMP_DIR/Modelfile_$$"
+        if ! cat > "$MODELFILE_PATH" <<EOF
+FROM "./$gguf_file"
+TEMPLATE """
+<|system|> {{ .System }} <|end|>
+<|user|> {{ .Prompt }} <|end|>
+<|assistant|> {{ .Response }} <|end|>
+"""
+EOF
+        then
+            echo "Error: Could not create Modelfile in /tmp either. Permission denied."
+            cd ..
+            return 1
+        fi
+        echo "Created Modelfile at: $MODELFILE_PATH"
+    else
+        MODELFILE_PATH="./Modelfile"
+        echo "Created Modelfile at: $MODELFILE_PATH"
+    fi
 
     # Build the model in Ollama
     echo "Building the model in Ollama..."
-    ollama create "$model_name" -f Modelfile
+    if ! ollama create "$model_name" -f "$MODELFILE_PATH"; then
+        echo "Error: Failed to create model in Ollama."
+        rm -f "$MODELFILE_PATH" 2>/dev/null
+        cd ..
+        return 1
+    fi
+    
+    # Clean up temporary Modelfile if it was created in temp directory
+    if [[ "$MODELFILE_PATH" == "$TEMP_DIR"/* ]] || [[ "$MODELFILE_PATH" == /tmp/* ]]; then
+        rm -f "$MODELFILE_PATH"
+    fi
 
     # Set as selected model
     SELECTED_MODEL="$model_name"
@@ -515,7 +896,7 @@ search_huggingface_models() {
         echo "Fetching and filtering models..."
         
         # We'll get more results and filter more strictly
-        curl -s "https://huggingface.co/api/models?search=$SEARCH_QUERY&limit=50" | \
+        SEARCH_RESULTS_JSON=$(curl -s "https://huggingface.co/api/models?search=$SEARCH_QUERY&limit=50" | \
         jq -r --arg KEYWORD "$(echo "$search_terms" | tr '[:upper:]' '[:lower:]')" '
           [.[] | 
           # First check: It MUST contain "gguf"
@@ -539,17 +920,17 @@ search_huggingface_models() {
               tags: .tags
             }
           ] | sort_by(-.downloads) | .[0:15]
-        ' > /tmp/gguf_results.json
+        ')
         
         # Count results
-        COUNT=$(jq 'length' /tmp/gguf_results.json 2>/dev/null || echo "0")
+        COUNT=$(echo "$SEARCH_RESULTS_JSON" | jq 'length' 2>/dev/null || echo "0")
         
         if [ "$COUNT" -gt 0 ]; then
             echo "✅ Found $COUNT $SEARCH_TYPE"
             echo "---------------------------------------"
             
             # Display numbered list of models
-            jq -r 'to_entries | .[] | "\(.key+1)) \(.value.modelId) (\(.value.downloads) downloads)"' /tmp/gguf_results.json
+            echo "$SEARCH_RESULTS_JSON" | jq -r 'to_entries | .[] | "\(.key+1)) \(.value.modelId) (\(.value.downloads) downloads)"'
             
             echo "---------------------------------------"
             echo "$((COUNT+1))) Show more details about a model"
@@ -567,9 +948,9 @@ search_huggingface_models() {
                 read -p "Enter the number of the model to see details (1-$COUNT): " detail_choice
                 if [ "$detail_choice" -ge 1 ] && [ "$detail_choice" -le $COUNT ]; then
                     # Get model details and display them
-                    MODEL_ID=$(jq -r ".[$((detail_choice-1))].modelId" /tmp/gguf_results.json)
+                    MODEL_ID=$(echo "$SEARCH_RESULTS_JSON" | jq -r ".[$((detail_choice-1))].modelId")
                     echo "=============== MODEL DETAILS ==============="
-                    jq -r ".[$((detail_choice-1))]" /tmp/gguf_results.json | jq '.'
+                    echo "$SEARCH_RESULTS_JSON" | jq -r ".[$((detail_choice-1))]" | jq '.'
                     echo "============================================="
                     read -p "Would you like to import this model? (y/n): " import_detail
                     if [[ $import_detail == "y" || $import_detail == "Y" ]]; then
@@ -585,7 +966,7 @@ search_huggingface_models() {
                 fi
             elif [ "$model_choice" -ge 1 ] && [ "$model_choice" -le $COUNT ]; then
                 # Get selected model ID
-                SELECTED_MODEL_ID=$(jq -r ".[$((model_choice-1))].modelId" /tmp/gguf_results.json)
+                SELECTED_MODEL_ID=$(echo "$SEARCH_RESULTS_JSON" | jq -r ".[$((model_choice-1))].modelId")
                 echo "Selected model: $SELECTED_MODEL_ID"
                 
                 # Import the selected model
@@ -595,25 +976,22 @@ search_huggingface_models() {
                 sleep 1
                 search_huggingface_models
             fi
-            
-            # Clean up
-            rm -f /tmp/gguf_results.json
         else
             echo "No models found containing BOTH 'gguf' AND '$search_terms'."
             echo "Showing top GGUF models instead:"
             echo "---------------------------------------"
             
-            curl -s "https://huggingface.co/api/models?search=gguf&sort=downloads&direction=-1&limit=10" | \
+            FALLBACK_MODELS_JSON=$(curl -s "https://huggingface.co/api/models?search=gguf&sort=downloads&direction=-1&limit=10" | \
             jq -r '[.[] | select(
                 (.modelId | ascii_downcase | contains("gguf")) or
                 (.tags | join(",") | ascii_downcase | contains("gguf"))
-            )] | .[0:10]' > /tmp/fallback_models.json
+            )] | .[0:10]')
             
-            COUNT_FB=$(jq 'length' /tmp/fallback_models.json 2>/dev/null || echo "0")
+            COUNT_FB=$(echo "$FALLBACK_MODELS_JSON" | jq 'length' 2>/dev/null || echo "0")
             
             if [ "$COUNT_FB" -gt 0 ]; then
                 # Display numbered list of models
-                jq -r 'to_entries | .[] | "\(.key+1)) \(.value.modelId) (\(.value.downloads) downloads)"' /tmp/fallback_models.json
+                echo "$FALLBACK_MODELS_JSON" | jq -r 'to_entries | .[] | "\(.key+1)) \(.value.modelId) (\(.value.downloads) downloads)"'
                 
                 echo "---------------------------------------"
                 echo "$((COUNT_FB+1))) Return to previous menu"
@@ -627,7 +1005,7 @@ search_huggingface_models() {
                     import_huggingface_model
                 elif [ "$fb_choice" -ge 1 ] && [ "$fb_choice" -le $COUNT_FB ]; then
                     # Get selected model ID
-                    FB_MODEL_ID=$(jq -r ".[$((fb_choice-1))].modelId" /tmp/fallback_models.json)
+                    FB_MODEL_ID=$(echo "$FALLBACK_MODELS_JSON" | jq -r ".[$((fb_choice-1))].modelId")
                     echo "Selected model: $FB_MODEL_ID"
                     
                     # Import the selected model
@@ -637,9 +1015,6 @@ search_huggingface_models() {
                     sleep 1
                     search_huggingface_models
                 fi
-                
-                # Clean up
-                rm -f /tmp/fallback_models.json
             else
                 echo "No fallback models found. Try a different search term."
                 sleep 2
@@ -658,7 +1033,7 @@ search_huggingface_models() {
 
 # Function for advanced LLM operations
 advanced_llm_operations() {
-    reset  # Added reset command to clear screen before showing submenu
+    clear_screen  # Use cross-platform clear function
     echo "Select an option:"
     echo "1) Fine-tune an LLM with a dataset"
     echo "2) Use embeddings for retrieval (RAG)"
@@ -719,7 +1094,7 @@ print('Embedding created:', embedding)
 
 # New function to delete selected models
 delete_models() {
-    reset
+    clear_screen
     echo "===== Delete Models ====="
     echo "This will remove selected models from Ollama"
     echo "--------------------------------"
@@ -804,8 +1179,9 @@ delete_models() {
 
 # Main function with menu - updated with delete option
 main() {
-    reset
+    clear_screen
     echo "===== Ollama Management Tool ====="
+    echo "Current OS: $OS"
     echo "1) Install/Update and Run Model (Current: $SELECTED_MODEL)"
     echo "2) Import/Search for a Model from Huggingace.co"
     echo "3) Advanced LLM Operations (Train The Model, Fine-tune)"
@@ -815,7 +1191,7 @@ main() {
     read -p "Enter your choice (1-5): " main_choice
 
     case $main_choice in
-        1) reset; install_and_run_model ;;
+        1) clear_screen; install_and_run_model ;;
         2) import_huggingface_model ;;
         3) advanced_llm_operations ;;
         4) delete_models ;;
@@ -825,9 +1201,14 @@ main() {
     
     # Return to main menu after function completes
     read -p "Press Enter to return to main menu..."
-    reset
+    clear_screen
     main
 }
+
+# Initialize OS detection and run dependency check
+detect_os
+echo "Detected OS: $OS"
+check_dependencies
 
 # Start the script
 main
