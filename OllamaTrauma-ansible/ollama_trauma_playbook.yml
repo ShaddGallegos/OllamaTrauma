@@ -1,0 +1,412 @@
+---
+# OllamaTrauma Ansible Playbook
+# Cross-platform Ollama deployment and management
+# Compatible with Linux, macOS, and Windows (via WinRM/SSH)
+
+- name: OllamaTrauma Cross-Platform Deployment
+  hosts: all
+  gather_facts: yes
+  vars:
+    # Default configuration
+    ollama_model: "{{ ansible_ollama_model | default('mistral') }}"
+    config_dir: "{{ ansible_user_dir | default(ansible_env.HOME) }}/.ollama_trauma"
+    skip_dependencies: "{{ ansible_skip_deps | default(false) }}"
+    install_only: "{{ ansible_install_only | default(false) }}"
+    
+    # Package mappings for different systems
+    dependencies:
+      linux:
+        curl: curl
+        git: git
+        jq: jq
+        python3: python3
+        pip: python3-pip
+      macos:
+        curl: curl
+        git: git
+        jq: jq
+        python3: python3
+      windows:
+        curl: curl
+        git: Git.Git
+        jq: jqlang.jq
+        python3: Python.Python.3
+
+  tasks:
+    - name: Display system information
+      debug:
+        msg: |
+          Target system: {{ ansible_system | default('Unknown') }}
+          Distribution: {{ ansible_distribution | default('Unknown') }}
+          Architecture: {{ ansible_architecture | default('Unknown') }}
+          Selected model: {{ ollama_model }}
+          Config directory: {{ config_dir }}
+
+    - name: Create configuration directory
+      file:
+        path: "{{ config_dir }}"
+        state: directory
+        mode: '0755'
+      tags: [setup]
+
+    # Linux-specific tasks
+    - block:
+        - name: Update package cache (Debian/Ubuntu)
+          apt:
+            update_cache: yes
+            cache_valid_time: 3600
+          when: ansible_pkg_mgr == "apt" and not skip_dependencies
+          become: yes
+
+        - name: Install dependencies (Linux)
+          package:
+            name: "{{ dependencies.linux[item] }}"
+            state: present
+          loop:
+            - curl
+            - git
+            - jq
+            - python3
+          when: not skip_dependencies
+          become: yes
+          ignore_errors: yes
+
+        - name: Install pip (Linux)
+          package:
+            name: "{{ dependencies.linux.pip }}"
+            state: present
+          when: not skip_dependencies and ansible_pkg_mgr in ['apt', 'dnf', 'yum']
+          become: yes
+          ignore_errors: yes
+
+        - name: Download and install Ollama (Linux)
+          shell: |
+            if ! command -v ollama &> /dev/null; then
+              curl -fsSL https://ollama.ai/install.sh | sh
+            else
+              echo "Ollama already installed"
+            fi
+          register: ollama_install_linux
+          changed_when: "'Ollama already installed' not in ollama_install_linux.stdout"
+
+        - name: Start Ollama service (Linux systemd)
+          systemd:
+            name: ollama
+            state: started
+            enabled: yes
+          when: ansible_service_mgr == "systemd"
+          become: yes
+          ignore_errors: yes
+
+        - name: Start Ollama service (Linux manual)
+          shell: |
+            if ! pgrep -f "ollama serve" > /dev/null; then
+              nohup ollama serve > /dev/null 2>&1 &
+              sleep 2
+            fi
+          when: ansible_service_mgr != "systemd"
+
+      when: ansible_system == "Linux"
+      tags: [linux, install]
+
+    # macOS-specific tasks
+    - block:
+        - name: Check if Homebrew is installed (macOS)
+          command: which brew
+          register: brew_check
+          failed_when: false
+          changed_when: false
+
+        - name: Install Homebrew (macOS)
+          shell: |
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          when: brew_check.rc != 0 and not skip_dependencies
+
+        - name: Install dependencies (macOS)
+          homebrew:
+            name: "{{ dependencies.macos[item] }}"
+            state: present
+          loop:
+            - curl
+            - git
+            - jq
+          when: not skip_dependencies and brew_check.rc == 0
+          ignore_errors: yes
+
+        - name: Install Ollama (macOS)
+          homebrew:
+            name: ollama
+            state: present
+          register: ollama_install_macos
+
+        - name: Start Ollama service (macOS)
+          command: brew services start ollama
+          when: ollama_install_macos is changed
+
+      when: ansible_system == "Darwin"
+      tags: [macos, install]
+
+    # Windows-specific tasks
+    - block:
+        - name: Check if winget is available (Windows)
+          win_command: winget --version
+          register: winget_check
+          failed_when: false
+          changed_when: false
+
+        - name: Install dependencies using winget (Windows)
+          win_command: "winget install {{ dependencies.windows[item] }}"
+          loop:
+            - curl
+            - git
+            - jq
+            - python3
+          when: not skip_dependencies and winget_check.rc == 0
+          ignore_errors: yes
+
+        - name: Check if Chocolatey is available (Windows)
+          win_command: choco --version
+          register: choco_check
+          failed_when: false
+          changed_when: false
+
+        - name: Install dependencies using Chocolatey (Windows)
+          win_chocolatey:
+            name: "{{ item }}"
+            state: present
+          loop:
+            - curl
+            - git
+            - jq
+            - python3
+          when: not skip_dependencies and choco_check.rc == 0 and winget_check.rc != 0
+          ignore_errors: yes
+
+        - name: Download Ollama installer (Windows)
+          win_get_url:
+            url: https://ollama.ai/download/OllamaSetup.exe
+            dest: "{{ ansible_env.TEMP }}\\OllamaSetup.exe"
+          register: ollama_download
+
+        - name: Install Ollama (Windows)
+          win_command: "{{ ansible_env.TEMP }}\\OllamaSetup.exe /S"
+          when: ollama_download is changed
+
+        - name: Start Ollama service (Windows)
+          win_service:
+            name: Ollama
+            state: started
+            start_mode: auto
+          ignore_errors: yes
+
+      when: ansible_system == "Win32NT"
+      tags: [windows, install]
+
+    # Common tasks for all platforms
+    - name: Wait for Ollama service to be ready
+      uri:
+        url: http://localhost:11434/api/tags
+        method: GET
+        timeout: 10
+      register: ollama_ready
+      until: ollama_ready.status == 200
+      retries: 30
+      delay: 1
+      ignore_errors: yes
+      tags: [verify]
+
+    - name: Check if model is already installed
+      uri:
+        url: "http://localhost:11434/api/tags"
+        method: GET
+      register: installed_models
+      when: not install_only
+      tags: [models]
+
+    - name: Pull Ollama model
+      command: "ollama pull {{ ollama_model }}"
+      register: model_pull
+      when: |
+        not install_only and 
+        (installed_models is not defined or 
+         ollama_model not in (installed_models.json.models | map(attribute='name') | list))
+      timeout: 1800  # 30 minutes timeout for large models
+      tags: [models]
+
+    - name: Create configuration file
+      copy:
+        content: |
+          {
+            "selected_model": "{{ ollama_model }}",
+            "os_info": {
+              "system": "{{ ansible_system }}",
+              "distribution": "{{ ansible_distribution | default('Unknown') }}",
+              "architecture": "{{ ansible_architecture }}",
+              "package_manager": "{{ ansible_pkg_mgr | default('unknown') }}"
+            },
+            "last_updated": "{{ ansible_date_time.iso8601 }}",
+            "managed_by_ansible": true
+          }
+        dest: "{{ config_dir }}/ollama_config.json"
+        mode: '0644'
+      tags: [config]
+
+    - name: Install Python dependencies
+      pip:
+        name:
+          - requests
+          - beautifulsoup4
+          - sentence-transformers
+          - numpy
+          - json5
+        extra_args: --user
+      when: not skip_dependencies
+      ignore_errors: yes
+      tags: [python]
+
+    - name: Copy cross-platform scripts
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ config_dir }}/{{ item.dest }}"
+        mode: '0755'
+      loop:
+        - { src: "OllamaTrauma_CrossPlatform.sh", dest: "ollama_trauma.sh" }
+        - { src: "ollama_trauma.py", dest: "ollama_trauma.py" }
+      when: ansible_system != "Win32NT"
+      tags: [scripts]
+
+    - name: Copy PowerShell script (Windows)
+      win_copy:
+        src: "OllamaTrauma.ps1"
+        dest: "{{ config_dir }}\\OllamaTrauma.ps1"
+      when: ansible_system == "Win32NT"
+      tags: [scripts]
+
+    - name: Create wrapper script (Unix-like systems)
+      copy:
+        content: |
+          #!/bin/bash
+          # OllamaTrauma wrapper script
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          
+          # Set environment variables for Ansible integration
+          export ANSIBLE_STDOUT_CALLBACK=json
+          export ANSIBLE_MAIN_CHOICE="{{ ansible_main_choice | default('1') }}"
+          export ANSIBLE_MODEL_CHOICE="{{ ansible_model_choice | default('1') }}"
+          export ANSIBLE_CUSTOM_MODEL="{{ ollama_model }}"
+          export ANSIBLE_SKIP_DEPS="{{ skip_dependencies }}"
+          
+          # Choose Python or Bash version
+          if command -v python3 &> /dev/null; then
+              python3 "$SCRIPT_DIR/ollama_trauma.py" "$@"
+          else
+              bash "$SCRIPT_DIR/ollama_trauma.sh" "$@"
+          fi
+        dest: "{{ config_dir }}/run_ollama_trauma.sh"
+        mode: '0755'
+      when: ansible_system != "Win32NT"
+      tags: [scripts]
+
+    - name: Create wrapper script (Windows)
+      win_copy:
+        content: |
+          @echo off
+          REM OllamaTrauma wrapper script for Windows
+          
+          REM Set environment variables for Ansible integration
+          set ANSIBLE_STDOUT_CALLBACK=json
+          set ANSIBLE_MAIN_CHOICE={{ ansible_main_choice | default('1') }}
+          set ANSIBLE_MODEL_CHOICE={{ ansible_model_choice | default('1') }}
+          set ANSIBLE_CUSTOM_MODEL={{ ollama_model }}
+          set ANSIBLE_SKIP_DEPS={{ skip_dependencies }}
+          
+          REM Run PowerShell script
+          powershell.exe -ExecutionPolicy Bypass -File "%~dp0OllamaTrauma.ps1" %*
+        dest: "{{ config_dir }}\\run_ollama_trauma.bat"
+      when: ansible_system == "Win32NT"
+      tags: [scripts]
+
+    - name: Test Ollama installation
+      command: "ollama --version"
+      register: ollama_version
+      tags: [verify]
+
+    - name: Display installation results
+      debug:
+        msg: |
+          Ollama installation completed successfully!
+          Version: {{ ollama_version.stdout | default('Unknown') }}
+          Selected model: {{ ollama_model }}
+          Configuration directory: {{ config_dir }}
+          
+          {% if ansible_system != "Win32NT" %}
+          To run interactively: {{ config_dir }}/run_ollama_trauma.sh
+          {% else %}
+          To run interactively: {{ config_dir }}\run_ollama_trauma.bat
+          {% endif %}
+          
+          Available models:
+          {% if installed_models is defined and installed_models.json is defined %}
+          {% for model in installed_models.json.models %}
+          - {{ model.name }}
+          {% endfor %}
+          {% else %}
+          - {{ ollama_model }} (just installed)
+          {% endif %}
+      tags: [verify]
+
+  handlers:
+    - name: restart ollama
+      systemd:
+        name: ollama
+        state: restarted
+      when: ansible_service_mgr == "systemd" and ansible_system == "Linux"
+      become: yes
+
+# Additional playbook for model management
+- name: OllamaTrauma Model Management
+  hosts: all
+  gather_facts: no
+  vars:
+    config_dir: "{{ ansible_user_dir | default(ansible_env.HOME) }}/.ollama_trauma"
+    
+  tasks:
+    - name: List available models
+      uri:
+        url: "http://localhost:11434/api/tags"
+        method: GET
+      register: current_models
+      when: ansible_action | default('') == 'list'
+      tags: [management]
+
+    - name: Display available models
+      debug:
+        msg: |
+          Currently installed models:
+          {% for model in current_models.json.models %}
+          - {{ model.name }} ({{ model.size | default('unknown size') }})
+          {% endfor %}
+      when: ansible_action | default('') == 'list' and current_models is defined
+      tags: [management]
+
+    - name: Remove specified model
+      command: "ollama rm {{ ansible_remove_model }}"
+      when: ansible_action | default('') == 'remove' and ansible_remove_model is defined
+      register: model_removal
+      tags: [management]
+
+    - name: Pull new model
+      command: "ollama pull {{ ansible_pull_model }}"
+      when: ansible_action | default('') == 'pull' and ansible_pull_model is defined
+      register: model_pull
+      timeout: 1800
+      tags: [management]
+
+    - name: Update configuration after model changes
+      lineinfile:
+        path: "{{ config_dir }}/ollama_config.json"
+        regexp: '"selected_model":'
+        line: '    "selected_model": "{{ ansible_pull_model | default(ansible_remove_model) }}",'
+        backrefs: yes
+      when: ansible_action in ['pull', 'remove'] and (ansible_pull_model is defined or ansible_remove_model is defined)
+      tags: [management]

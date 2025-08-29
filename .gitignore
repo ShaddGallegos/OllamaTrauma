@@ -1,0 +1,81 @@
+# OllamaTrauma Git Ignore Configuration
+
+# Training Data - Exclude all training data from git tracking
+OllamaTrauma-TrainingData/
+training_data_*/
+*training*.json
+*training*.txt
+*training*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Java
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**
+!**/src/test/**
+target/
+build/
+.gradle/
+gradle-app.setting
+!gradle-wrapper.properties
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+*.out
+*.err
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Environment files
+.env
+.env.local
+
+# Ansible
+*.retry
+.vault_pass.txt
+
+# Node modules (if any)
+node_modules/
+
+# Compiled executables
+*.exe
+ollama-trauma
+OllamaTrauma

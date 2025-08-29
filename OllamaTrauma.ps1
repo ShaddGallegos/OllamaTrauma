@@ -1,471 +1,696 @@
-# OllamaTrauma - PowerShell version for Windows
-# This script provides Ollama management functionality for Windows users
+# OllamaTrauma PowerShell Cross-Platform Script
+# Compatible with Windows, macOS (PowerShell Core), and Linux (PowerShell Core)
+# Version: 2.0
+
+param(
+    [string]$ConfigDir = $PSScriptRoot,
+    [string]$Model = "mistral",
+    [switch]$InstallOnly,
+    [switch]$Quiet,
+    [switch]$Version
+)
+
+# Version information
+if ($Version) {
+    Write-Host "OllamaTrauma PowerShell v2.0" -ForegroundColor Green
+    exit 0
+}
 
 # Global variables
-$SELECTED_MODEL = "mistral"
-$OS = "windows"
+$Global:SelectedModel = $Model
+$Global:ConfigFile = Join-Path $ConfigDir "ollama_config.json"
+$Global:LogFile = Join-Path $ConfigDir "ollama_trauma.log"
+$Global:IsAnsible = $false
 
-# Function to check and install dependencies
-function Check-Dependencies {
-    Write-Host "Checking for required dependencies..."
+# Color definitions
+$Colors = @{
+    Red = [ConsoleColor]::Red
+    Green = [ConsoleColor]::Green
+    Yellow = [ConsoleColor]::Yellow
+    Blue = [ConsoleColor]::Blue
+    Magenta = [ConsoleColor]::Magenta
+    Cyan = [ConsoleColor]::Cyan
+    White = [ConsoleColor]::White
+}
+
+# Check if running under Ansible
+if ($env:ANSIBLE_STDOUT_CALLBACK -or $env:ANSIBLE_REMOTE_USER -or $env:ANSIBLE_PLAYBOOK) {
+    $Global:IsAnsible = $true
+}
+
+function Write-Log {
+    param(
+        [string]$Level,
+        [string]$Message,
+        [ConsoleColor]$Color = [ConsoleColor]::White
+    )
     
-    # Check if jq is installed
-    if (-not (Get-Command jq -ErrorAction SilentlyContinue)) {
-        Write-Host "jq not found. Installing..."
-        
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Host "Using winget to install jq..."
-            winget install jqlang.jq
-        } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
-            Write-Host "Using Chocolatey to install jq..."
-            choco install jq
-        } elseif (Get-Command scoop -ErrorAction SilentlyContinue) {
-            Write-Host "Using Scoop to install jq..."
-            scoop install jq
-        } else {
-            Write-Host "WARNING: No Windows package manager found (winget, choco, scoop)."
-            Write-Host "Please install jq manually:"
-            Write-Host "1. Download from: https://github.com/jqlang/jq/releases"
-            Write-Host "2. Or install Chocolatey: https://chocolatey.org/install"
-            Write-Host "3. Then run: choco install jq"
-        }
-    } else {
-        Write-Host "jq is already installed."
-    }
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logEntry = "[$timestamp] [$Level] $Message"
     
-    # Check if git is installed
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        Write-Host "git not found. Installing..."
-        
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Host "Using winget to install git..."
-            winget install Git.Git
-        } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
-            Write-Host "Using Chocolatey to install git..."
-            choco install git
-        } elseif (Get-Command scoop -ErrorAction SilentlyContinue) {
-            Write-Host "Using Scoop to install git..."
-            scoop install git
-        } else {
-            Write-Host "WARNING: No Windows package manager found."
-            Write-Host "Please install Git manually:"
-            Write-Host "1. Download from: https://git-scm.com/download/win"
-            Write-Host "2. Or install Chocolatey: https://chocolatey.org/install"
-            Write-Host "3. Then run: choco install git"
-        }
-    } else {
-        Write-Host "git is already installed."
-    }
+    # Write to log file
+    Add-Content -Path $Global:LogFile -Value $logEntry -ErrorAction SilentlyContinue
     
-    # Check if Git LFS is installed
-    if (-not (Get-Command git-lfs -ErrorAction SilentlyContinue)) {
-        Write-Host "Git LFS not found. Installing..."
-        
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Host "Installing Git LFS via winget..."
-            winget install GitHub.GitLFS
-        } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
-            Write-Host "Installing Git LFS via Chocolatey..."
-            choco install git-lfs
-        } elseif (Get-Command scoop -ErrorAction SilentlyContinue) {
-            Write-Host "Installing Git LFS via Scoop..."
-            scoop install git-lfs
-        } else {
-            Write-Host "WARNING: No Windows package manager found."
-            Write-Host "Please install Git LFS manually:"
-            Write-Host "1. Download from: https://git-lfs.github.io/"
-            Write-Host "2. Or install Chocolatey: https://chocolatey.org/install"
-            Write-Host "3. Then run: choco install git-lfs"
-        }
-    } else {
-        Write-Host "Git LFS is already installed."
+    # Write to console with color
+    if (-not $Quiet) {
+        Write-Host "[$Level] $Message" -ForegroundColor $Color
     }
 }
 
-# Function to install/update Ollama
-function Install-Ollama {
-    if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
-        Write-Host "Ollama not found. Installing..."
-        
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Host "Using winget to install Ollama..."
-            winget install Ollama.Ollama
-        } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
-            Write-Host "Using Chocolatey to install Ollama..."
-            choco install ollama
+function Get-OSInfo {
+    $osInfo = @{
+        Platform = $PSVersionTable.Platform
+        OS = $PSVersionTable.OS
+        Edition = $PSVersionTable.PSEdition
+        Version = $PSVersionTable.PSVersion.ToString()
+        PackageManager = "unknown"
+    }
+    
+    # Determine package manager based on OS
+    if ($IsWindows -or $PSVersionTable.PSEdition -eq "Desktop") {
+        $osInfo.PackageManager = "winget"
+        if (Get-Command choco -ErrorAction SilentlyContinue) {
+            $osInfo.PackageManager = "choco"
+        } elseif (Get-Command scoop -ErrorAction SilentlyContinue) {
+            $osInfo.PackageManager = "scoop"
+        }
+    } elseif ($IsMacOS) {
+        $osInfo.PackageManager = "brew"
+    } elseif ($IsLinux) {
+        if (Get-Command dnf -ErrorAction SilentlyContinue) {
+            $osInfo.PackageManager = "dnf"
+        } elseif (Get-Command apt -ErrorAction SilentlyContinue) {
+            $osInfo.PackageManager = "apt"
+        } elseif (Get-Command yum -ErrorAction SilentlyContinue) {
+            $osInfo.PackageManager = "yum"
+        } elseif (Get-Command pacman -ErrorAction SilentlyContinue) {
+            $osInfo.PackageManager = "pacman"
+        }
+    }
+    
+    return $osInfo
+}
+
+function Install-Package {
+    param(
+        [string]$PackageName,
+        [hashtable]$PackageMap = @{}
+    )
+    
+    $osInfo = Get-OSInfo
+    $actualPackage = if ($PackageMap.ContainsKey($osInfo.PackageManager)) {
+        $PackageMap[$osInfo.PackageManager]
+    } else {
+        $PackageName
+    }
+    
+    Write-Log "INFO" "Installing package: $actualPackage" $Colors.Yellow
+    
+    try {
+        switch ($osInfo.PackageManager) {
+            "winget" {
+                $result = Start-Process -FilePath "winget" -ArgumentList "install", $actualPackage -Wait -PassThru -NoNewWindow
+                return $result.ExitCode -eq 0
+            }
+            "choco" {
+                $result = Start-Process -FilePath "choco" -ArgumentList "install", "-y", $actualPackage -Wait -PassThru -NoNewWindow -Verb RunAs
+                return $result.ExitCode -eq 0
+            }
+            "scoop" {
+                $result = Start-Process -FilePath "scoop" -ArgumentList "install", $actualPackage -Wait -PassThru -NoNewWindow
+                return $result.ExitCode -eq 0
+            }
+            "brew" {
+                $result = Start-Process -FilePath "brew" -ArgumentList "install", $actualPackage -Wait -PassThru -NoNewWindow
+                return $result.ExitCode -eq 0
+            }
+            "apt" {
+                $result = Start-Process -FilePath "sudo" -ArgumentList "apt", "update" -Wait -PassThru -NoNewWindow
+                if ($result.ExitCode -eq 0) {
+                    $result = Start-Process -FilePath "sudo" -ArgumentList "apt", "install", "-y", $actualPackage -Wait -PassThru -NoNewWindow
+                }
+                return $result.ExitCode -eq 0
+            }
+            "dnf" {
+                $result = Start-Process -FilePath "sudo" -ArgumentList "dnf", "install", "-y", $actualPackage -Wait -PassThru -NoNewWindow
+                return $result.ExitCode -eq 0
+            }
+            default {
+                Write-Log "ERROR" "Unknown package manager: $($osInfo.PackageManager)" $Colors.Red
+                return $false
+            }
+        }
+    } catch {
+        Write-Log "ERROR" "Failed to install $actualPackage : $($_.Exception.Message)" $Colors.Red
+        return $false
+    }
+}
+
+function Test-Command {
+    param([string]$Command)
+    return [bool](Get-Command $Command -ErrorAction SilentlyContinue)
+}
+
+function Test-Dependencies {
+    Write-Log "INFO" "Checking dependencies..." $Colors.Cyan
+    
+    $dependencies = @{
+        "curl" = @{
+            "winget" = "curl"
+            "choco" = "curl"
+            "scoop" = "curl"
+        }
+        "git" = @{
+            "winget" = "Git.Git"
+            "choco" = "git"
+            "scoop" = "git"
+        }
+    }
+    
+    $allInstalled = $true
+    
+    foreach ($dep in $dependencies.Keys) {
+        if (-not (Test-Command $dep)) {
+            Write-Log "WARN" "$dep not found. Installing..." $Colors.Yellow
+            if (-not (Install-Package $dep $dependencies[$dep])) {
+                $allInstalled = $false
+            }
         } else {
-            Write-Host "Please install Ollama manually:"
-            Write-Host "1. Download from: https://ollama.com/download/windows"
-            Write-Host "2. Or install a package manager first:"
-            Write-Host "   - Chocolatey: https://chocolatey.org/install"
-            Write-Host "   - Scoop: https://scoop.sh/"
-            Write-Host "   - Winget: Built into Windows 10/11"
-            Write-Host "3. Then run: choco install ollama"
+            Write-Log "INFO" "$dep is already installed" $Colors.Green
+        }
+    }
+    
+    # Check PowerShell modules
+    $modules = @("PowerShellGet", "PackageManagement")
+    foreach ($module in $modules) {
+        if (-not (Get-Module -Name $module -ListAvailable)) {
+            Write-Log "WARN" "Installing PowerShell module: $module" $Colors.Yellow
+            try {
+                Install-Module -Name $module -Force -AllowClobber -Scope CurrentUser
+                Write-Log "INFO" "Successfully installed $module" $Colors.Green
+            } catch {
+                Write-Log "ERROR" "Failed to install $module : $($_.Exception.Message)" $Colors.Red
+            }
+        }
+    }
+    
+    return $allInstalled
+}
+
+function Test-OllamaRunning {
+    try {
+        $response = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 5 -ErrorAction Stop
+        return $response.StatusCode -eq 200
+    } catch {
+        return $false
+    }
+}
+
+function Start-OllamaService {
+    if (Test-OllamaRunning) {
+        Write-Log "INFO" "Ollama service is already running" $Colors.Green
+        return $true
+    }
+    
+    Write-Log "INFO" "Starting Ollama service..." $Colors.Yellow
+    
+    try {
+        $osInfo = Get-OSInfo
+        
+        if ($IsWindows -or $PSVersionTable.PSEdition -eq "Desktop") {
+            # Windows: Start as background job
+            $job = Start-Job -ScriptBlock { ollama serve }
+            Start-Sleep 2
+        } elseif ($IsMacOS -and (Test-Command "brew")) {
+            Start-Process -FilePath "brew" -ArgumentList "services", "start", "ollama" -NoNewWindow
+        } else {
+            # Linux/Unix: Start as background process
+            Start-Process -FilePath "ollama" -ArgumentList "serve" -NoNewWindow
+        }
+        
+        # Wait for service to be ready
+        $maxAttempts = 30
+        for ($i = 0; $i -lt $maxAttempts; $i++) {
+            if (Test-OllamaRunning) {
+                Write-Log "INFO" "Ollama service started successfully" $Colors.Green
+                return $true
+            }
+            Start-Sleep 1
+        }
+        
+        Write-Log "ERROR" "Ollama service failed to start within 30 seconds" $Colors.Red
+        return $false
+        
+    } catch {
+        Write-Log "ERROR" "Failed to start Ollama service: $($_.Exception.Message)" $Colors.Red
+        return $false
+    }
+}
+
+function Install-Ollama {
+    if (Test-Command "ollama") {
+        Write-Log "INFO" "Ollama is already installed" $Colors.Green
+        return $true
+    }
+    
+    Write-Log "INFO" "Installing Ollama..." $Colors.Yellow
+    
+    try {
+        $osInfo = Get-OSInfo
+        
+        if ($IsWindows -or $PSVersionTable.PSEdition -eq "Desktop") {
+            Write-Host "For Windows, please download and install Ollama from: https://ollama.ai/download" -ForegroundColor Yellow
+            Write-Host "Press Enter after installation is complete..." -ForegroundColor Cyan
+            if (-not $Global:IsAnsible) {
+                Read-Host
+            }
+            
+            if (-not (Test-Command "ollama")) {
+                Write-Log "ERROR" "Ollama installation failed or not in PATH" $Colors.Red
+                return $false
+            }
+        } else {
+            # macOS and Linux
+            $installScript = Invoke-WebRequest -Uri "https://ollama.ai/install.sh" -UseBasicParsing
+            $installScript.Content | bash
+        }
+        
+        Write-Log "INFO" "Ollama installed successfully" $Colors.Green
+        return $true
+        
+    } catch {
+        Write-Log "ERROR" "Failed to install Ollama: $($_.Exception.Message)" $Colors.Red
+        return $false
+    }
+}
+
+function Get-OllamaModels {
+    try {
+        $output = & ollama list 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $models = @()
+            $lines = $output -split "`n" | Select-Object -Skip 1
+            foreach ($line in $lines) {
+                if ($line.Trim()) {
+                    $modelName = ($line -split "\s+")[0]
+                    $models += $modelName
+                }
+            }
+            return $models
+        }
+    } catch {
+        Write-Log "ERROR" "Failed to get models: $($_.Exception.Message)" $Colors.Red
+    }
+    return @()
+}
+
+function Invoke-OllamaPull {
+    param([string]$ModelName)
+    
+    Write-Log "INFO" "Pulling model: $ModelName" $Colors.Yellow
+    
+    try {
+        $process = Start-Process -FilePath "ollama" -ArgumentList "pull", $ModelName -Wait -PassThru -NoNewWindow
+        
+        if ($process.ExitCode -eq 0) {
+            Write-Log "INFO" "Successfully pulled $ModelName" $Colors.Green
+            return $true
+        } else {
+            Write-Log "ERROR" "Failed to pull $ModelName" $Colors.Red
             return $false
         }
-    } else {
-        Write-Host "Ollama is already installed."
-        $version = ollama --version 2>$null
-        if ($version) {
-            Write-Host "Current Ollama version: $version"
-        }
+    } catch {
+        Write-Log "ERROR" "Failed to pull $ModelName : $($_.Exception.Message)" $Colors.Red
+        return $false
+    }
+}
+
+function Remove-OllamaModel {
+    param([string]$ModelName)
+    
+    Write-Log "INFO" "Removing model: $ModelName" $Colors.Yellow
+    
+    try {
+        $process = Start-Process -FilePath "ollama" -ArgumentList "rm", $ModelName -Wait -PassThru -NoNewWindow
         
-        # Check for update options
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Host "You can update via winget: winget upgrade Ollama.Ollama"
-        } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
-            Write-Host "You can update via Chocolatey: choco upgrade ollama"
+        if ($process.ExitCode -eq 0) {
+            Write-Log "INFO" "Successfully removed $ModelName" $Colors.Green
+            return $true
         } else {
-            Write-Host "You can update manually by downloading from: https://ollama.com/download/windows"
+            Write-Log "ERROR" "Failed to remove $ModelName" $Colors.Red
+            return $false
         }
-    }
-    return $true
-}
-
-# Function to clear screen
-function Clear-Screen {
-    Clear-Host
-}
-
-# Function to show main menu
-function Show-MainMenu {
-    Clear-Screen
-    Write-Host "===== Ollama Management Tool (Windows) ====="
-    Write-Host "Current OS: $OS"
-    Write-Host "1) Install/Update and Run Model (Current: $SELECTED_MODEL)"
-    Write-Host "2) Import/Search for a Model from HuggingFace.co"
-    Write-Host "3) Delete Models"
-    Write-Host "4) Exit"
-    Write-Host "============================================="
-    
-    $choice = Read-Host "Enter your choice (1-4)"
-    
-    switch ($choice) {
-        "1" { Install-AndRunModel }
-        "2" { Import-HuggingFaceModel }
-        "3" { Delete-Models }
-        "4" { 
-            Write-Host "Exiting..."
-            exit 0
-        }
-        default { 
-            Write-Host "Invalid option. Please try again."
-            Start-Sleep -Seconds 1
-            Show-MainMenu
-        }
+    } catch {
+        Write-Log "ERROR" "Failed to remove $ModelName : $($_.Exception.Message)" $Colors.Red
+        return $false
     }
 }
 
-# Function to install and run model
-function Install-AndRunModel {
-    Clear-Screen
+function Start-OllamaInteractive {
+    param([string]$ModelName)
     
-    if (-not (Install-Ollama)) {
-        Read-Host "Press Enter to return to main menu..."
-        Show-MainMenu
+    if ($Global:IsAnsible) {
+        Write-Log "INFO" "Ansible mode: Model $ModelName is ready" $Colors.Green
         return
     }
     
-    Write-Host "Checking for available models..."
+    Write-Log "INFO" "Starting interactive session with $ModelName" $Colors.Green
+    Write-Host "Starting $ModelName... (Ctrl+C to exit)" -ForegroundColor Green
     
     try {
-        $modelList = ollama list | Select-Object -Skip 1 | ForEach-Object { 
-            ($_ -split '\s+')[0] -split ':' | Select-Object -First 1
-        } | Sort-Object -Unique
-        
-        if ($modelList.Count -eq 0) {
-            Write-Host "No models found. Would you like to:"
-            Write-Host "1) Pull the Mistral model"
-            Write-Host "2) Pull a different model"
-            Write-Host "3) Return to main menu"
-            
-            $choice = Read-Host "Enter choice (1-3)"
-            
-            switch ($choice) {
-                "1" {
-                    Write-Host "Pulling Mistral model..."
-                    ollama pull mistral
-                    $script:SELECTED_MODEL = "mistral"
-                }
-                "2" {
-                    $pullModel = Read-Host "Enter model name to pull"
-                    Write-Host "Pulling $pullModel model..."
-                    ollama pull $pullModel
-                    $script:SELECTED_MODEL = $pullModel
-                }
-                "3" {
-                    Show-MainMenu
-                    return
-                }
-                default {
-                    Write-Host "Invalid choice. Returning to main menu."
-                    Show-MainMenu
-                    return
-                }
-            }
-        } else {
-            Write-Host "Available models:"
-            Write-Host "----------------------------"
-            
-            for ($i = 0; $i -lt $modelList.Count; $i++) {
-                $modelNum = $i + 1
-                $modelInfo = ollama list | Select-String $modelList[$i] | Select-Object -First 1
-                $modelSize = if ($modelInfo) { ($modelInfo -split '\s+')[2,3] -join ' ' } else { "Unknown" }
-                Write-Host "$modelNum) $($modelList[$i]) ($modelSize)"
-            }
-            
-            $pullOption = $modelList.Count + 1
-            $currentOption = $modelList.Count + 2
-            $returnOption = $modelList.Count + 3
-            
-            Write-Host "----------------------------"
-            Write-Host "$pullOption) Pull a new model"
-            Write-Host "$currentOption) Use current selection ($SELECTED_MODEL)"
-            Write-Host "$returnOption) Return to main menu"
-            Write-Host "----------------------------"
-            
-            $choice = Read-Host "Enter choice (1-$returnOption)"
-            
-            if ($choice -eq $returnOption) {
-                Show-MainMenu
-                return
-            } elseif ($choice -eq $currentOption) {
-                Write-Host "Using current selection: $SELECTED_MODEL"
-            } elseif ($choice -eq $pullOption) {
-                $pullModel = Read-Host "Enter model name to pull"
-                Write-Host "Pulling $pullModel model..."
-                ollama pull $pullModel
-                $script:SELECTED_MODEL = $pullModel
-            } elseif ($choice -ge 1 -and $choice -le $modelList.Count) {
-                $script:SELECTED_MODEL = $modelList[$choice - 1]
-                Write-Host "Selected model: $SELECTED_MODEL"
-            } else {
-                Write-Host "Invalid choice. Returning to main menu."
-                Show-MainMenu
-                return
-            }
-        }
-        
-        if ($SELECTED_MODEL) {
-            Write-Host "Starting $SELECTED_MODEL LLM..."
-            ollama run $SELECTED_MODEL
-        }
+        & ollama run $ModelName
     } catch {
-        Write-Host "Error: $($_.Exception.Message)"
+        Write-Log "ERROR" "Failed to run $ModelName : $($_.Exception.Message)" $Colors.Red
     }
-    
-    Read-Host "Press Enter to return to main menu..."
-    Show-MainMenu
 }
 
-# Function to import HuggingFace model
-function Import-HuggingFaceModel {
+function Save-Config {
+    $config = @{
+        selected_model = $Global:SelectedModel
+        os_info = Get-OSInfo
+        last_updated = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    }
+    
+    try {
+        $config | ConvertTo-Json -Depth 3 | Set-Content -Path $Global:ConfigFile
+        Write-Log "DEBUG" "Configuration saved to $Global:ConfigFile" $Colors.Cyan
+    } catch {
+        Write-Log "ERROR" "Failed to save config: $($_.Exception.Message)" $Colors.Red
+    }
+}
+
+function Load-Config {
+    if (Test-Path $Global:ConfigFile) {
+        try {
+            $config = Get-Content -Path $Global:ConfigFile | ConvertFrom-Json
+            $Global:SelectedModel = $config.selected_model
+            Write-Log "DEBUG" "Configuration loaded from $Global:ConfigFile" $Colors.Cyan
+        } catch {
+            Write-Log "WARN" "Failed to load config: $($_.Exception.Message)" $Colors.Yellow
+        }
+    }
+}
+
+function Clear-Screen {
+    if (-not $Global:IsAnsible) {
+        Clear-Host
+    }
+}
+
+function Wait-ForUser {
+    param([string]$Message = "Press Enter to continue...")
+    if (-not $Global:IsAnsible) {
+        Write-Host $Message -ForegroundColor Cyan
+        Read-Host
+    }
+}
+
+function Install-AndRunModel {
     Clear-Screen
-    Write-Host "===== Hugging Face Model Import ====="
-    Write-Host "1) Enter model URL manually"
-    Write-Host "2) Return to main menu"
-    Write-Host "=================================="
     
-    $choice = Read-Host "Enter your choice (1-2)"
+    # Install Ollama if needed
+    if (-not (Install-Ollama)) {
+        return
+    }
     
-    switch ($choice) {
-        "1" { 
-            $modelUrl = Read-Host "Enter Hugging Face model URL or ID (e.g., TheBloke/Mistral-7B-Instruct-v0.1-GGUF)"
-            if ($modelUrl) {
-                Import-DirectUrl $modelUrl
-            } else {
-                Write-Host "No model specified. Returning to menu."
-                Start-Sleep -Seconds 1
-                Import-HuggingFaceModel
+    # Start Ollama service
+    if (-not (Start-OllamaService)) {
+        return
+    }
+    
+    # Check if model exists
+    $availableModels = Get-OllamaModels
+    $modelExists = $availableModels -contains $Global:SelectedModel
+    
+    if (-not $modelExists) {
+        if (-not (Invoke-OllamaPull $Global:SelectedModel)) {
+            return
+        }
+    }
+    
+    # Run model
+    Start-OllamaInteractive $Global:SelectedModel
+}
+
+function Select-ModelInteractive {
+    while ($true) {
+        Clear-Screen
+        Write-Host "=== Model Selection ===" -ForegroundColor Blue
+        Write-Host "Current model: $Global:SelectedModel" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "Popular models:"
+        Write-Host "1) mistral (7B) - Fast and efficient"
+        Write-Host "2) llama2 (7B) - Meta's base model"
+        Write-Host "3) llama2:13b (13B) - Larger variant"
+        Write-Host "4) codellama (7B) - Code-focused model"
+        Write-Host "5) phi (2.7B) - Microsoft's small model"
+        Write-Host "6) Custom model name"
+        Write-Host "7) Return to main menu"
+        Write-Host ""
+        
+        if ($Global:IsAnsible) {
+            $choice = $env:ANSIBLE_MODEL_CHOICE
+            if (-not $choice) { $choice = "1" }
+            Write-Log "INFO" "Ansible mode: Using model choice $choice" $Colors.Cyan
+        } else {
+            $choice = Read-Host "Enter your choice (1-7)"
+        }
+        
+        switch ($choice) {
+            "1" { $Global:SelectedModel = "mistral" }
+            "2" { $Global:SelectedModel = "llama2" }
+            "3" { $Global:SelectedModel = "llama2:13b" }
+            "4" { $Global:SelectedModel = "codellama" }
+            "5" { $Global:SelectedModel = "phi" }
+            "6" {
+                if ($Global:IsAnsible) {
+                    $customModel = $env:ANSIBLE_CUSTOM_MODEL
+                    if (-not $customModel) { $customModel = "mistral" }
+                } else {
+                    $customModel = Read-Host "Enter custom model name"
+                }
+                if ($customModel) {
+                    $Global:SelectedModel = $customModel
+                }
+            }
+            "7" { return }
+            default {
+                Write-Log "WARN" "Invalid choice, keeping current model: $Global:SelectedModel" $Colors.Yellow
+                if (-not $Global:IsAnsible) { Start-Sleep 1 }
             }
         }
-        "2" { Show-MainMenu }
-        default { 
-            Write-Host "Invalid option. Please try again."
-            Start-Sleep -Seconds 1
-            Import-HuggingFaceModel
+        
+        Write-Log "INFO" "Selected model: $Global:SelectedModel" $Colors.Green
+        Save-Config
+        break
+    }
+}
+
+function Show-AdvancedOperations {
+    while ($true) {
+        Clear-Screen
+        Write-Host "=== Advanced Operations ===" -ForegroundColor Magenta
+        Write-Host "1) List all models"
+        Write-Host "2) Remove models"
+        Write-Host "3) Model information"
+        Write-Host "4) System information"
+        Write-Host "5) Return to main menu"
+        Write-Host ""
+        
+        if ($Global:IsAnsible) {
+            $choice = $env:ANSIBLE_ADVANCED_CHOICE
+            if (-not $choice) { $choice = "5" }
+            Write-Log "INFO" "Ansible mode: Using advanced choice $choice" $Colors.Cyan
+        } else {
+            $choice = Read-Host "Enter your choice (1-5)"
+        }
+        
+        switch ($choice) {
+            "1" {
+                $models = Get-OllamaModels
+                if ($models.Count -gt 0) {
+                    Write-Host "Available models:" -ForegroundColor Green
+                    foreach ($model in $models) {
+                        Write-Host "  - $model"
+                    }
+                } else {
+                    Write-Host "No models installed." -ForegroundColor Yellow
+                }
+                Wait-ForUser
+            }
+            "2" {
+                $models = Get-OllamaModels
+                if ($models.Count -eq 0) {
+                    Write-Host "No models to remove." -ForegroundColor Yellow
+                    Wait-ForUser
+                    continue
+                }
+                
+                Write-Host "Available models:" -ForegroundColor Green
+                for ($i = 0; $i -lt $models.Count; $i++) {
+                    Write-Host "$($i + 1)) $($models[$i])"
+                }
+                
+                if (-not $Global:IsAnsible) {
+                    try {
+                        $index = [int](Read-Host "Select model to remove (number)") - 1
+                        if ($index -ge 0 -and $index -lt $models.Count) {
+                            $modelToRemove = $models[$index]
+                            $confirm = Read-Host "Remove $modelToRemove? (y/N)"
+                            if ($confirm -eq "y") {
+                                Remove-OllamaModel $modelToRemove
+                                if ($modelToRemove -eq $Global:SelectedModel) {
+                                    $Global:SelectedModel = "mistral"
+                                    Save-Config
+                                }
+                            }
+                        } else {
+                            Write-Host "Invalid selection." -ForegroundColor Red
+                        }
+                    } catch {
+                        Write-Host "Invalid input." -ForegroundColor Red
+                    }
+                }
+                Wait-ForUser
+            }
+            "3" {
+                if (Test-Command "ollama") {
+                    Write-Host "Ollama version:" -ForegroundColor Green
+                    & ollama --version
+                    
+                    Write-Host "Current model info:" -ForegroundColor Green
+                    & ollama show $Global:SelectedModel 2>$null
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Host "Model $Global:SelectedModel not found." -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "Ollama not installed." -ForegroundColor Red
+                }
+                Wait-ForUser
+            }
+            "4" {
+                $osInfo = Get-OSInfo
+                Write-Host "System Information:" -ForegroundColor Green
+                Write-Host "Platform: $($osInfo.Platform)"
+                Write-Host "OS: $($osInfo.OS)"
+                Write-Host "PowerShell Edition: $($osInfo.Edition)"
+                Write-Host "PowerShell Version: $($osInfo.Version)"
+                Write-Host "Package Manager: $($osInfo.PackageManager)"
+                Write-Host "Script Directory: $PSScriptRoot"
+                Write-Host "Config File: $Global:ConfigFile"
+                Write-Host "Current Model: $Global:SelectedModel"
+                Write-Host "Ansible Mode: $Global:IsAnsible"
+                Wait-ForUser
+            }
+            "5" { return }
+            default {
+                Write-Log "WARN" "Invalid option" $Colors.Yellow
+                if (-not $Global:IsAnsible) { Start-Sleep 1 }
+            }
         }
     }
 }
 
-# Function to import model from URL
-function Import-DirectUrl {
-    param($modelUrl)
-    
-    Write-Host "Importing model: $modelUrl"
-    
-    $modelName = Split-Path $modelUrl -Leaf
-    
-    # Check if directory exists
-    if (Test-Path $modelName) {
-        Write-Host "Directory '$modelName' already exists."
-        $choice = Read-Host "Do you want to (r)esume download, (d)elete and start fresh, or (c)ancel? [r/d/c]"
+function Show-MainMenu {
+    while ($true) {
+        Clear-Screen
+        Write-Host "====================================" -ForegroundColor Cyan
+        Write-Host "    OllamaTrauma PowerShell v2.0    " -ForegroundColor Cyan
+        Write-Host "====================================" -ForegroundColor Cyan
+        Write-Host ""
         
-        switch ($choice.ToLower()) {
-            "r" {
-                Write-Host "Resuming download..."
-                Set-Location $modelName
-                git lfs install
-                git lfs pull
+        $osInfo = Get-OSInfo
+        Write-Host "Current OS: $($osInfo.Platform)" -ForegroundColor Green
+        Write-Host "Current Model: $Global:SelectedModel" -ForegroundColor Green
+        if ($Global:IsAnsible) {
+            Write-Host "Mode: Ansible Automation" -ForegroundColor Yellow
+        } else {
+            Write-Host "Mode: Interactive" -ForegroundColor Blue
+        }
+        Write-Host ""
+        Write-Host "1) Install/Run Ollama Model"
+        Write-Host "2) Select Different Model"
+        Write-Host "3) Advanced Operations"
+        Write-Host "4) View Logs"
+        Write-Host "5) Exit"
+        Write-Host "===================================="
+        
+        if ($Global:IsAnsible) {
+            $choice = $env:ANSIBLE_MAIN_CHOICE
+            if (-not $choice) { $choice = "1" }
+            Write-Log "INFO" "Ansible mode: Using main choice $choice" $Colors.Cyan
+        } else {
+            $choice = Read-Host "Enter your choice (1-5)"
+        }
+        
+        switch ($choice) {
+            "1" { Install-AndRunModel }
+            "2" { Select-ModelInteractive }
+            "3" { Show-AdvancedOperations }
+            "4" {
+                if (Test-Path $Global:LogFile) {
+                    Write-Host "Recent log entries:" -ForegroundColor Green
+                    Get-Content -Path $Global:LogFile -Tail 20
+                } else {
+                    Write-Host "No log file found." -ForegroundColor Yellow
+                }
+                Wait-ForUser
             }
-            "d" {
-                Write-Host "Deleting directory and starting fresh..."
-                Remove-Item $modelName -Recurse -Force
+            "5" {
+                Write-Log "INFO" "Exiting OllamaTrauma PowerShell" $Colors.Green
+                Write-Host "Thank you for using OllamaTrauma!" -ForegroundColor Green
+                return
             }
             default {
-                Write-Host "Import cancelled."
-                Import-HuggingFaceModel
-                return
+                Write-Log "WARN" "Invalid option: $choice" $Colors.Yellow
+                if (-not $Global:IsAnsible) { Start-Sleep 1 }
             }
         }
-    }
-    
-    if (-not (Test-Path $modelName)) {
-        Write-Host "Cloning the model repository..."
-        git lfs install
-        git clone "https://huggingface.co/$modelUrl"
-        Set-Location $modelName
-        git lfs pull
-    } else {
-        Set-Location $modelName
-    }
-    
-    # Find GGUF files
-    $ggufFiles = Get-ChildItem -Recurse -Filter "*.gguf" | Select-Object -ExpandProperty Name
-    
-    if ($ggufFiles.Count -eq 0) {
-        Write-Host "No .gguf files found in repository."
-        $ggufFile = Read-Host "Enter the exact GGUF file path (or press Enter to cancel)"
-        if (-not $ggufFile) {
-            Write-Host "No GGUF file specified. Import cancelled."
-            Set-Location ..
-            Import-HuggingFaceModel
+        
+        # In Ansible mode, exit after one operation
+        if ($Global:IsAnsible) {
+            Write-Log "INFO" "Ansible operation completed" $Colors.Cyan
             return
         }
-    } elseif ($ggufFiles.Count -eq 1) {
-        $ggufFile = $ggufFiles[0]
-        Write-Host "Found GGUF file: $ggufFile"
-    } else {
-        Write-Host "Multiple GGUF files found:"
-        for ($i = 0; $i -lt $ggufFiles.Count; $i++) {
-            Write-Host "$($i + 1)) $($ggufFiles[$i])"
-        }
-        $choice = Read-Host "Select file number (1-$($ggufFiles.Count))"
-        $ggufFile = $ggufFiles[$choice - 1]
-    }
-    
-    # Create Modelfile
-    $modelFileContent = @"
-FROM "./$ggufFile"
-TEMPLATE """
-<|system|> {{ .System }} <|end|>
-<|user|> {{ .Prompt }} <|end|>
-<|assistant|> {{ .Response }} <|end|>
-"""
-"@
-    
-    try {
-        $modelFileContent | Out-File -FilePath "Modelfile" -Encoding UTF8
-        Write-Host "Created Modelfile"
-        
-        # Build model in Ollama
-        Write-Host "Building the model in Ollama..."
-        ollama create $modelName -f Modelfile
-        
-        $script:SELECTED_MODEL = $modelName
-        
-        Set-Location ..
-        
-        Write-Host "Starting the model $modelName..."
-        ollama run $modelName
-        
-    } catch {
-        Write-Host "Error: $($_.Exception.Message)"
-        Set-Location ..
-    }
-    
-    Read-Host "Press Enter to return to main menu..."
-    Show-MainMenu
-}
-
-# Function to delete models
-function Delete-Models {
-    Clear-Screen
-    Write-Host "===== Delete Models ====="
-    Write-Host "This will remove selected models from Ollama"
-    Write-Host "--------------------------------"
-    
-    try {
-        $modelList = ollama list | Select-Object -Skip 1 | ForEach-Object { 
-            ($_ -split '\s+')[0] -split ':' | Select-Object -First 1
-        } | Sort-Object -Unique
-        
-        if ($modelList.Count -eq 0) {
-            Write-Host "No models found to delete."
-            Start-Sleep -Seconds 2
-            Show-MainMenu
-            return
-        }
-        
-        Write-Host "Available models:"
-        Write-Host "----------------------------"
-        
-        for ($i = 0; $i -lt $modelList.Count; $i++) {
-            $modelNum = $i + 1
-            $modelInfo = ollama list | Select-String $modelList[$i] | Select-Object -First 1
-            $modelSize = if ($modelInfo) { ($modelInfo -split '\s+')[2,3] -join ' ' } else { "Unknown" }
-            Write-Host "$modelNum) $($modelList[$i]) ($modelSize)"
-        }
-        
-        $returnOption = $modelList.Count + 1
-        Write-Host "----------------------------"
-        Write-Host "$returnOption) Return to main menu"
-        Write-Host "----------------------------"
-        
-        $choice = Read-Host "Enter model number to delete (1-$returnOption)"
-        
-        if ($choice -eq $returnOption) {
-            Show-MainMenu
-            return
-        } elseif ($choice -ge 1 -and $choice -le $modelList.Count) {
-            $modelToDelete = $modelList[$choice - 1]
-            Write-Host "You are about to delete model: $modelToDelete"
-            $confirm = Read-Host "Are you sure? (y/n)"
-            
-            if ($confirm.ToLower() -eq "y") {
-                Write-Host "Deleting $modelToDelete..."
-                ollama rm $modelToDelete
-                
-                if ($modelToDelete -eq $SELECTED_MODEL) {
-                    $script:SELECTED_MODEL = "mistral"
-                    Write-Host "Current model was deleted. New selected model: $SELECTED_MODEL"
-                }
-                
-                Write-Host "Model deleted successfully."
-                Start-Sleep -Seconds 1
-                
-                $another = Read-Host "Delete another model? (y/n)"
-                if ($another.ToLower() -eq "y") {
-                    Delete-Models
-                } else {
-                    Show-MainMenu
-                }
-            } else {
-                Write-Host "Deletion cancelled."
-                Start-Sleep -Seconds 1
-                Delete-Models
-            }
-        } else {
-            Write-Host "Invalid choice."
-            Start-Sleep -Seconds 1
-            Delete-Models
-        }
-    } catch {
-        Write-Host "Error: $($_.Exception.Message)"
     }
 }
 
 # Main execution
-Write-Host "Detected OS: $OS"
-Check-Dependencies
-Show-MainMenu
+try {
+    Write-Log "INFO" "Starting OllamaTrauma PowerShell v2.0" $Colors.Green
+    
+    # Ensure config directory exists
+    if (-not (Test-Path $ConfigDir)) {
+        New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
+    }
+    
+    # Load configuration
+    Load-Config
+    
+    # Handle install-only mode
+    if ($InstallOnly) {
+        Test-Dependencies
+        Install-Ollama
+        exit 0
+    }
+    
+    # Check dependencies (skip in Ansible if requested)
+    if (-not $Global:IsAnsible -or -not $env:ANSIBLE_SKIP_DEPS) {
+        Test-Dependencies
+    }
+    
+    # Save initial config
+    Save-Config
+    
+    # Start main menu
+    Show-MainMenu
+    
+} catch {
+    Write-Log "ERROR" "Unexpected error: $($_.Exception.Message)" $Colors.Red
+    if (-not $Global:IsAnsible) {
+        Wait-ForUser "Press Enter to exit..."
+    }
+    exit 1
+} finally {
+    Save-Config
+}
