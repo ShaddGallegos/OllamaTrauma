@@ -1,0 +1,8 @@
+# Code Development Profile - Models optimized for coding
+# Total RAM needed: 8GB | Total Disk: ~15GB
+# Download time: ~2-3 hours (depending on connection)
+
+codellama:7b
+codellama:7b-python
+codellama:7b-instruct
+phi:2.7b

@@ -1,0 +1,10 @@
+# High Performance Profile - Best quality models (requires 32GB+ RAM)
+# Total RAM needed: 32GB+ | Total Disk: ~60GB+
+# Download time: ~6-10 hours (depending on connection)
+# WARNING: Only use if you have sufficient RAM!
+
+llama2:13b
+mixtral:8x7b
+codellama:13b
+mistral:7b
+llava:7b

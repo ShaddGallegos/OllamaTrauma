@@ -1,0 +1,9 @@
+# Production Profile - Quality models for production use
+# Total RAM needed: 16GB+ | Total Disk: ~30GB
+# Download time: ~3-5 hours (depending on connection)
+
+llama2:7b
+llama2:13b
+mistral:7b
+neural-chat:7b
+codellama:7b

@@ -1,0 +1,7 @@
+# Low Resource Profile - For systems with limited RAM (4-8GB)
+# Total RAM needed: 4GB | Total Disk: ~8GB
+# Download time: ~30-60 minutes (depending on connection)
+
+tinyllama:1.1b
+phi:2.7b
+orca-mini:3b

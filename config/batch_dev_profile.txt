@@ -1,0 +1,8 @@
+# Development Profile - Lightweight models for testing and development
+# Total RAM needed: ~8GB | Total Disk: ~10GB
+# Download time: ~1-2 hours (depending on connection)
+
+tinyllama:1.1b
+phi:2.7b
+llama2:7b
+mistral:7b
