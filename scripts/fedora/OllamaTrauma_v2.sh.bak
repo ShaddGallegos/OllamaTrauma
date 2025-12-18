@@ -1414,10 +1414,10 @@ health_check_dashboard() {
           echo "    → http://localhost:11434"
         fi
       else
-        echo "  ${YELLOW}${NC} Ollama: Installed, not running"
+        echo "  ${YELLOW}○${NC} Ollama: Installed, not running"
       fi
     else
-      echo "  ${RED}${NC} Ollama: Not installed"
+      echo "  ${RED}✗${NC} Ollama: Not installed"
     fi
     
     # LocalAI
@@ -1427,9 +1427,9 @@ health_check_dashboard() {
         echo "    → http://localhost:8080"
       else
         if $CONTAINER_CMD images | grep -q "local-ai"; then
-          echo "  ${YELLOW}${NC} LocalAI: Installed, not running"
+          echo "  ${YELLOW}○${NC} LocalAI: Installed, not running"
         else
-          echo "  ${RED}${NC} LocalAI: Not installed"
+          echo "  ${RED}✗${NC} LocalAI: Not installed"
         fi
       fi
     fi
@@ -1439,7 +1439,7 @@ health_check_dashboard() {
       echo "  ${GREEN}OK${NC} llama.cpp: Installed"
       echo "    → ${LLAMACPP_DIR}"
     else
-      echo "  ${RED}${NC} llama.cpp: Not installed"
+      echo "  ${RED}✗${NC} llama.cpp: Not installed"
     fi
     
     # text-generation-webui
@@ -1447,10 +1447,10 @@ health_check_dashboard() {
       if pgrep -f "text-generation-webui" &>/dev/null; then
         echo "  ${GREEN}OK${NC} text-gen-webui: Running"
       else
-        echo "  ${YELLOW}${NC} text-gen-webui: Installed, not running"
+        echo "  ${YELLOW}○${NC} text-gen-webui: Installed, not running"
       fi
     else
-      echo "  ${RED}${NC} text-gen-webui: Not installed"
+      echo "  ${RED}✗${NC} text-gen-webui: Not installed"
     fi
     echo
     

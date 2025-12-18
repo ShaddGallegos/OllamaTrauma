@@ -54,4 +54,4 @@ if ! command -v ollama &> /dev/null; then
   curl -fsSL https://ollama.com/install.sh | sh
 fi
 
-log_info " RHEL setup complete"
+log_info "✓ RHEL setup complete"

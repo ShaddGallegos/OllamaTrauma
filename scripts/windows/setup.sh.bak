@@ -42,4 +42,4 @@ python3 -m pip install --user -r ../requirements.txt
 # Ollama
 log_info "Download Ollama for Windows from: https://ollama.com/download/windows"
 
-log_info " Windows setup complete"
+log_info "✓ Windows setup complete"
