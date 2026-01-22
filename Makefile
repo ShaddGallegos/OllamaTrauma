@@ -43,7 +43,7 @@ deps:
 .PHONY: test
 test: deps
 	@echo "Running menu test harness..."
-	python3 test/test_runner.py || (echo "Tests failed. See log/ for details." && exit 1)
+	python3 test/test_runner.py || (echo "Tests failed. See test output for details." && exit 1)
 
 .PHONY: test-ci
 test-ci: deps

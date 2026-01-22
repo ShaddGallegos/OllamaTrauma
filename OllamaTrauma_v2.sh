@@ -760,55 +760,8 @@ EOFPY
   chmod +x "${PROJECT_ROOT}/scripts/url_crawler.py"
   log_success "Created url_crawler.py"
   
-  # Monitor Download Script
-  cat > "${PROJECT_ROOT}/scripts/monitor_download.sh" << 'EOFSH'
-#!/bin/bash
-# Monitor batch download progress
-
-clear
-echo "==================================================================="
-echo "  OllamaTrauma Batch Download Monitor"
-echo "==================================================================="
-echo ""
-echo "Press Ctrl+C to stop monitoring (download will continue)"
-echo ""
-
-while true; do
-    echo "==================================================================="
-    echo "Time: $(date '+%Y-%m-%d %H:%M:%S')"
-    echo "───────────────────────────────────────────────────────────────────"
-    
-    # Show downloaded models
-    echo ""
-    echo "Downloaded Models:"
-    if command -v ollama &>/dev/null; then
-        ollama list 2>/dev/null || echo "  (Ollama not running yet)"
-    else
-        echo "  (Ollama not installed yet)"
-    fi
-    
-    # Show disk space
-    echo ""
-    echo "Disk Space:"
-    df -h / | grep -E "Filesystem|/dev/mapper" | head -2
-    
-    echo ""
-    echo "==================================================================="
-    echo "Refreshing in 10 seconds... (Ctrl+C to exit)"
-    
-    sleep 10
-    clear
-done
-EOFSH
-  
-  chmod +x "${PROJECT_ROOT}/scripts/monitor_download.sh"
-  log_success "Created monitor_download.sh"
-  
-  # Create convenience symlink in project root
-  if [[ ! -L "${PROJECT_ROOT}/monitor_download.sh" ]]; then
-    ln -sf "${PROJECT_ROOT}/scripts/monitor_download.sh" "${PROJECT_ROOT}/monitor_download.sh"
-    log_success "Created symlink to monitor_download.sh in project root"
-  fi
+  # Monitor script generation removed — monitoring is inlined in the
+  # `monitor_batch_download()` function and platform-specific scripts.
 }
 
 initialize_project() {
@@ -1721,8 +1674,8 @@ download_model_huggingface() {
   echo
   
   # prefer the new interactive CLI script; fall back to legacy hf_search.py if present
-  if [[ -f "${PROJECT_ROOT}/scripts/hf_model_search.py" ]]; then
-    HF_SEARCH_SCRIPT="${PROJECT_ROOT}/scripts/hf_model_search.py"
+  if [[ -f "${PROJECT_ROOT}/scripts/python/hf_model_search.py" ]]; then
+    HF_SEARCH_SCRIPT="${PROJECT_ROOT}/scripts/python/hf_model_search.py"
   elif [[ -f "${PROJECT_ROOT}/scripts/hf_search.py" ]]; then
     HF_SEARCH_SCRIPT="${PROJECT_ROOT}/scripts/hf_search.py"
   else
@@ -1893,13 +1846,13 @@ run_hf_search_cli() {
   log_step "Hugging Face Model Search (CLI)"
   echo
 
-  if [[ ! -f "${PROJECT_ROOT}/scripts/hf_model_search.py" ]]; then
-    log_error "scripts/hf_model_search.py not found. Please ensure the script exists."
+  if [[ ! -f "${PROJECT_ROOT}/scripts/python/hf_model_search.py" ]]; then
+    log_error "scripts/python/hf_model_search.py not found. Please ensure the script exists."
     pause
     return 1
   fi
 
-  python3 "${PROJECT_ROOT}/scripts/hf_model_search.py" || log_error "Hugging Face search CLI exited with error"
+  python3 "${PROJECT_ROOT}/scripts/python/hf_model_search.py" || log_error "Hugging Face search CLI exited with error"
   pause
 }
 

@@ -71,14 +71,14 @@ You can search Hugging Face models from the repository using the included intera
 Interactive:
 
 ```bash
-python3 scripts/hf_model_search.py
+python3 scripts/python/hf_model_search.py
 ```
 
 One-shot searches:
 
 ```bash
-python3 scripts/hf_model_search.py --name "gpt"
-python3 scripts/hf_model_search.py --tag "text-generation"
+python3 scripts/python/hf_model_search.py --name "gpt"
+python3 scripts/python/hf_model_search.py --tag "text-generation"
 ```
 
 The CLI returns the top 10 models by downloads for your query. Menus use `0` to go back or exit.
