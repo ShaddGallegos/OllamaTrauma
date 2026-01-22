@@ -33,14 +33,14 @@ readonly LOG_DIR="${PROJECT_ROOT}/data/logs"
 readonly LOG_FILE="${LOG_DIR}/ollamatrauma_$(date +%Y%m%d_%H%M%S).log"
 readonly ERROR_LOG="${LOG_DIR}/ollamatrauma_errors_$(date +%Y%m%d_%H%M%S).log"
 
-# Colors
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
-readonly MAGENTA='\033[0;35m'
-readonly NC='\033[0m'
+# Colors (use $'...' so variables contain actual escape bytes)
+readonly RED=$'\033[0;31m'
+readonly GREEN=$'\033[0;32m'
+readonly YELLOW=$'\033[1;33m'
+readonly BLUE=$'\033[0;34m'
+readonly CYAN=$'\033[0;36m'
+readonly MAGENTA=$'\033[0;35m'
+readonly NC=$'\033[0m'
 
 # OS Detection
 OS=""
