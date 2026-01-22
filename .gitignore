@@ -40,3 +40,30 @@ Thumbs.db
 !data/hf_cache/.gitkeep
 !data/logs/.gitkeep
 !models/.gitkeep
+# Ansible generated files
+ansible.cfg
+*.retry
+# Credentials and secrets
+env.conf
+*.vault
+vault.yml
+vault.yaml
+# Backup files
+*.bak
+
+# Project test logs
+log/
+*.log
+# BEGIN MANAGED BLOCK: Ansible secrets
+# --------------------------------------------------------
+# Ansible secrets
+# Keep secrets and generated configs out of git.
+# Managed by Ansible-Standards configure_projects.
+# Covered entries:
+# - env.yml
+# - vault.yml
+# - .vault_pass.txt
+# - env.conf
+# - ansible.cfg (generated)
+# - *.vault
+# END MANAGED BLOCK: Ansible secrets

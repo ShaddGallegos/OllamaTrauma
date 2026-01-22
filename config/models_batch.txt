@@ -1,8 +1,10 @@
-# Code Development Profile - Models optimized for coding
-# Total RAM needed: 8GB | Total Disk: ~15GB
-# Download time: ~2-3 hours (depending on connection)
+# High Performance Profile - Best quality models (requires 32GB+ RAM)
+# Total RAM needed: 32GB+ | Total Disk: ~60GB+
+# Download time: ~6-10 hours (depending on connection)
+# WARNING: Only use if you have sufficient RAM!
 
-codellama:7b
-codellama:7b-python
-codellama:7b-instruct
-phi:2.7b
+llama2:13b
+mixtral:8x7b
+codellama:13b
+mistral:7b
+llava:7b
