@@ -2166,28 +2166,36 @@ monitor_batch_download() {
   show_banner
   log_step "Batch Download Monitor"
   echo
-  
-  local monitor_script="${PROJECT_ROOT}/scripts/monitor_download.sh"
-  
-  if [[ ! -f "$monitor_script" ]]; then
-    log_error "Monitor script not found: $monitor_script"
-    log_info "Run 'Initialize Project' to create utility scripts"
-    pause
-    return 1
-  fi
-  
-  log_info "Starting download monitor..."
+  log_info "Starting inline download monitor..."
   log_info "This will refresh every 10 seconds"
   log_info "Press Ctrl+C to exit (downloads will continue)"
   echo
   read -p "Press Enter to start monitor..." -r
-  
-  # Run the monitor script
-  bash "$monitor_script"
-  
-  # When user exits monitor, return to menu
-  echo
-  log_info "Monitor stopped"
+
+  # Inline monitoring loop (replaces external scripts/monitor_download.sh)
+  while true; do
+    clear_screen
+    echo "==================================================================="
+    echo "  OllamaTrauma Batch Download Monitor"
+    echo "==================================================================="
+    echo ""
+    echo "Time: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "───────────────────────────────────────────────────────────────────"
+    echo ""
+    echo "Downloaded Models:"
+    if command -v ollama &>/dev/null; then
+      ollama list 2>/dev/null || echo "  (Ollama not running yet)"
+    else
+      echo "  (Ollama not installed yet)"
+    fi
+    echo ""
+    echo "Disk Space:"
+    df -h / | awk 'NR==1 || /\// {print}' | head -2
+    echo ""
+    echo "==================================================================="
+    echo "Refreshing in 10 seconds... (Ctrl+C to exit)"
+    sleep 10
+  done
   pause
 }
 
