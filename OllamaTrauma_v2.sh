@@ -21,7 +21,8 @@ IFS=$'\n\t'
 # ============================================================================
 readonly SCRIPT_VERSION="2.1.0"
 readonly PROJECT_NAME="OllamaTrauma"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_script_dir_tmp="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR="${_script_dir_tmp}"
 readonly PROJECT_ROOT="${SCRIPT_DIR}"
 
 # Paths
@@ -30,8 +31,17 @@ readonly LOCALAI_CONTAINER="localai"
 readonly TEXTGEN_DIR="${PROJECT_ROOT}/text-generation-webui"
 readonly BACKUP_DIR="${PROJECT_ROOT}/.backups"
 readonly LOG_DIR="${PROJECT_ROOT}/data/logs"
-readonly LOG_FILE="${LOG_DIR}/ollamatrauma_$(date +%Y%m%d_%H%M%S).log"
-readonly ERROR_LOG="${LOG_DIR}/ollamatrauma_errors_$(date +%Y%m%d_%H%M%S).log"
+_log_file_tmp="${LOG_DIR}/ollamatrauma_$(date +%Y%m%d_%H%M%S).log"
+readonly LOG_FILE="${_log_file_tmp}"
+_error_log_tmp="${LOG_DIR}/ollamatrauma_errors_$(date +%Y%m%d_%H%M%S).log"
+readonly ERROR_LOG="${_error_log_tmp}"
+
+# GPU/run-once setup marker
+readonly GPU_RUNONCE_MARKER="${PROJECT_ROOT}/data/.gpu_setup_done"
+
+# Path to any built llama.cpp binaries (will be set by runonce if built)
+LLAMA_CLI_BIN=""
+LLAMA_SERVER_BIN=""
 
 # Colors (use $'...' so variables contain actual escape bytes)
 readonly RED=$'\033[0;31m'
@@ -88,8 +98,10 @@ log_debug() {
 # DEBUG MODE FUNCTIONS
 # ============================================================================
 
-readonly DEBUG_LOG="${LOG_DIR}/debug_$(date +%Y%m%d_%H%M%S).log"
-readonly DEBUG_REPORT="${LOG_DIR}/debug_report_$(date +%Y%m%d_%H%M%S).txt"
+_debug_log_tmp="${LOG_DIR}/debug_$(date +%Y%m%d_%H%M%S).log"
+readonly DEBUG_LOG="${_debug_log_tmp}"
+_debug_report_tmp="${LOG_DIR}/debug_report_$(date +%Y%m%d_%H%M%S).txt"
+readonly DEBUG_REPORT="${_debug_report_tmp}"
 
 debug_test_function() {
   local func_name="$1"
@@ -118,6 +130,119 @@ debug_test_function() {
   echo "" | tee -a "$DEBUG_LOG"
   return 0
 }
+
+# ============================================================================
+# GPU detection and run-once build (llama.cpp integration)
+# ============================================================================
+detect_gpus() {
+  GPU_AVAILABLE=0
+  GPU_VENDOR=""
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    GPU_AVAILABLE=1
+    GPU_VENDOR="nvidia"
+    GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || true)
+    log_info "NVIDIA GPU detected: ${GPU_INFO}"
+  elif command -v rocm-smi >/dev/null 2>&1; then
+    GPU_AVAILABLE=1
+    GPU_VENDOR="amd"
+    log_info "AMD ROCm GPU detected"
+  else
+    log_debug "No supported GPU vendor detected (nvidia-smi/rocm-smi missing)"
+  fi
+}
+
+gpu_runonce_setup() {
+  # Ensure data directories exist
+  mkdir -p "${PROJECT_ROOT}/data" "${PROJECT_ROOT}/data/logs" || true
+
+  if [[ -f "${GPU_RUNONCE_MARKER}" ]]; then
+    log_debug "GPU run-once setup already completed (marker present)"
+    # If marker exists, try to locate built binaries
+    if [[ -x "${PROJECT_ROOT}/scripts/third_party/llama.cpp/build/bin/llama-cli" ]]; then
+      LLAMA_CLI_BIN="${PROJECT_ROOT}/scripts/third_party/llama.cpp/build/bin/llama-cli"
+    fi
+    if [[ -x "${PROJECT_ROOT}/scripts/third_party/llama.cpp/build/bin/llama-server" ]]; then
+      LLAMA_SERVER_BIN="${PROJECT_ROOT}/scripts/third_party/llama.cpp/build/bin/llama-server"
+    fi
+    return 0
+  fi
+
+  # Only attempt heavy installs on systems with GPUs
+  if [[ "${GPU_AVAILABLE:-0}" -ne 1 ]]; then
+    log_info "No GPU detected; skipping GPU run-once build. Creating marker to avoid repeated checks."
+    touch "${GPU_RUNONCE_MARKER}" || true
+    return 0
+  fi
+
+  log_step "Starting GPU run-once setup: cloning/building llama.cpp with CUDA support"
+
+  # Clone helper already exists in scripts/setup_llama_cpp_cuda.sh
+  if [[ ! -d "${PROJECT_ROOT}/scripts/third_party/llama.cpp" ]]; then
+    log_info "Cloning llama.cpp into scripts/third_party/llama.cpp"
+    bash "${PROJECT_ROOT}/scripts/setup_llama_cpp_cuda.sh" || log_warn "Helper clone failed; continuing"
+  fi
+
+  LLAMA_SRC_DIR="${PROJECT_ROOT}/scripts/third_party/llama.cpp"
+  BUILD_DIR="${LLAMA_SRC_DIR}/build"
+
+  # Ensure cmake present
+  if ! command -v cmake >/dev/null 2>&1; then
+    log_warn "cmake not found; cannot build llama.cpp. Install cmake and re-run."
+    touch "${GPU_RUNONCE_MARKER}" || true
+    return 0
+  fi
+
+  mkdir -p "$BUILD_DIR"
+  pushd "$BUILD_DIR" >/dev/null || return 1
+  export PATH=/usr/local/cuda/bin:$PATH
+
+  # Try CMake with GGML_CUDA
+  if command -v nvcc >/dev/null 2>&1; then
+    log_info "nvcc found; configuring CMake with GGML_CUDA=ON"
+    if cmake "$LLAMA_SRC_DIR" -DGGML_CUDA=ON >/dev/null 2>&1; then
+      if cmake --build . -j$(nproc); then
+        log_success "Built llama.cpp with CUDA support"
+      else
+        log_warn "Build failed with GGML_CUDA; falling back to CPU build"
+        cmake "$LLAMA_SRC_DIR" -DGGML_CUDA=OFF || true
+        cmake --build . -j$(nproc) || true
+      fi
+    else
+      log_warn "CMake configure with GGML_CUDA failed; trying CPU build"
+      cmake "$LLAMA_SRC_DIR" -DGGML_CUDA=OFF || true
+      cmake --build . -j$(nproc) || true
+    fi
+  else
+    log_info "nvcc not found; performing CPU build"
+    cmake "$LLAMA_SRC_DIR" -DGGML_CUDA=OFF || true
+    cmake --build . -j$(nproc) || true
+  fi
+
+  popd >/dev/null || true
+
+  # Record built binary locations if present
+  if [[ -x "${LLAMA_SRC_DIR}/build/bin/llama-cli" ]]; then
+    LLAMA_CLI_BIN="${LLAMA_SRC_DIR}/build/bin/llama-cli"
+    log_success "llama-cli available: ${LLAMA_CLI_BIN}"
+  fi
+  if [[ -x "${LLAMA_SRC_DIR}/build/bin/llama-server" ]]; then
+    LLAMA_SERVER_BIN="${LLAMA_SRC_DIR}/build/bin/llama-server"
+    log_success "llama-server available: ${LLAMA_SERVER_BIN}"
+  fi
+
+  # Create a convenient symlink at ${LLAMACPP_DIR} so existing code paths find llama.cpp
+  if [[ -d "${LLAMA_SRC_DIR}" ]] && [[ ! -e "${LLAMACPP_DIR}" ]]; then
+    log_info "Creating symlink ${LLAMACPP_DIR} -> ${LLAMA_SRC_DIR}"
+    ln -s "$LLAMA_SRC_DIR" "$LLAMACPP_DIR" || log_warn "Failed to symlink llama.cpp into ${LLAMACPP_DIR}"
+  fi
+
+  touch "${GPU_RUNONCE_MARKER}" || true
+  log_step "GPU run-once setup complete (marker created at ${GPU_RUNONCE_MARKER})"
+}
+
+# Run detection and run-once setup early (non-fatal)
+detect_gpus
+gpu_runonce_setup
 
 debug_mode() {
   clear_screen
@@ -1157,7 +1282,7 @@ install_textgen_webui() {
     log_error "Installation may be incomplete"
   fi
   
-  cd "$PROJECT_ROOT"
+  cd "$PROJECT_ROOT" || return
   pause
 }
 
@@ -1275,11 +1400,30 @@ start_runner() {
       log_info "Access at: http://localhost:8080"
       ;;
     3)
-      if [[ ! -f "${LLAMACPP_DIR}/main" ]]; then
-        log_error "llama.cpp is not installed or not built"
+      if [[ -n "${LLAMA_CLI_BIN}" && -x "${LLAMA_CLI_BIN}" ]] || [[ -f "${LLAMACPP_DIR}/main" ]]; then
+        # Prefer using built llama.cpp binaries if available
+        if [[ -n "${LLAMA_SERVER_BIN}" && -x "${LLAMA_SERVER_BIN}" ]]; then
+          log_info "llama.cpp server binary available: ${LLAMA_SERVER_BIN}"
+          read -p "Start llama.cpp server now with a model path? (Enter model path or leave empty to skip): " -r modelpath
+          if [[ -n "$modelpath" ]]; then
+            log_info "Starting llama.cpp server: ${LLAMA_SERVER_BIN} --model ${modelpath}"
+            nohup "${LLAMA_SERVER_BIN}" --model "$modelpath" >/dev/null 2>&1 &
+            log_success "llama.cpp server started (background)"
+          else
+            log_info "Skipped starting llama.cpp server"
+          fi
+        else
+          # Fallback: use CLI binary or legacy main
+          local cli_path="${LLAMA_CLI_BIN:-${LLAMACPP_DIR}/main}"
+          if [[ -x "$cli_path" ]]; then
+            log_info "llama.cpp CLI available: $cli_path"
+            log_info "To run manually: $cli_path -m <model_path>"
+          else
+            log_error "llama.cpp binary not executable: $cli_path"
+          fi
+        fi
       else
-        log_info "llama.cpp location: ${LLAMACPP_DIR}"
-        log_info "To run manually: cd ${LLAMACPP_DIR} && ./main -m <model_path>"
+        log_error "llama.cpp is not installed or not built"
       fi
       ;;
     4)
@@ -1287,7 +1431,7 @@ start_runner() {
         log_error "text-generation-webui is not installed"
       else
         log_info "Starting text-generation-webui..."
-        cd "$TEXTGEN_DIR"
+        cd "$TEXTGEN_DIR" || return
         if [[ -f "start_linux.sh" ]]; then
           ./start_linux.sh &
           log_success "text-generation-webui started"
@@ -1616,10 +1760,17 @@ check_installed_runners() {
   fi
   echo
   
-  # Check llama.cpp
-  if [[ -d "$LLAMACPP_DIR" ]] && [[ -f "${LLAMACPP_DIR}/main" ]]; then
+  # Check llama.cpp (prefer built binaries)
+  if [[ -n "${LLAMA_CLI_BIN}" && -x "${LLAMA_CLI_BIN}" ]] || [[ -x "${LLAMA_SERVER_BIN}" ]] || [[ -f "${LLAMACPP_DIR}/main" ]]; then
     log_success "llama.cpp: Installed"
-    echo "  Location: ${LLAMACPP_DIR}"
+    if [[ -n "${LLAMA_CLI_BIN}" && -x "${LLAMA_CLI_BIN}" ]]; then
+      echo "  CLI: ${LLAMA_CLI_BIN}"
+    elif [[ -x "${LLAMACPP_DIR}/main" ]]; then
+      echo "  Legacy main: ${LLAMACPP_DIR}/main"
+    fi
+    if [[ -n "${LLAMA_SERVER_BIN}" && -x "${LLAMA_SERVER_BIN}" ]]; then
+      echo "  Server: ${LLAMA_SERVER_BIN}"
+    fi
   else
     log_warn "llama.cpp: Not installed"
   fi
@@ -1697,9 +1848,7 @@ interactive_model_selector() {
   
   log_info "Downloading $model_name with Ollama..."
   echo
-  ollama pull "$model_name"
-  
-  if [[ $? -eq 0 ]]; then
+  if ollama pull "$model_name"; then
     log_success "Model downloaded: $model_name"
     echo
     read -p "Test the model now? [y/N]: " -r reply
@@ -1949,7 +2098,7 @@ setup_batch_download_helper() {
   fi
   echo
   
-  read -p "Select profile [0-6, Enter for recommended]: " choice
+  read -r -p "Select profile [0-6, Enter for recommended]: " choice
   
   # Use recommended if user just presses Enter
   if [[ -z "$choice" ]]; then
@@ -2023,7 +2172,7 @@ setup_batch_download_helper() {
     
     # Count models
     local model_count
-    model_count=$(grep -v "^#" "${PROJECT_ROOT}/config/models_batch.txt" | grep -v "^$" | wc -l)
+    model_count=$(grep -cv -e '^#' -e '^$' "${PROJECT_ROOT}/config/models_batch.txt" 2>/dev/null || echo 0)
     echo "Total models: $model_count"
     echo
     
@@ -2429,10 +2578,10 @@ remove_model_files() {
     return 1
   fi
   
-  if [[ -d "${models_dir}/${model_name}" ]]; then
+    if [[ -d "${models_dir}/${model_name}" ]]; then
     read -p "Remove ${model_name}? [y/N]: " -r reply
     if [[ "$reply" =~ ^[Yy]$ ]]; then
-      rm -rf "${models_dir}/${model_name}"
+      rm -rf "${models_dir:?}/${model_name}"
       log_success "Model removed: $model_name"
     else
       log_info "Cancelled"
@@ -2552,12 +2701,13 @@ view_system_logs() {
   
   if [[ -d "$LOG_DIR" ]] && [[ -n "$(ls -A "$LOG_DIR" 2>/dev/null)" ]]; then
     log_info "Recent log files:"
-    ls -lht "$LOG_DIR" | head -10
+    # Use find to list recent log files robustly
+    find "$LOG_DIR" -maxdepth 1 -type f -name 'ollamatrauma_*.log' -printf '%T@ %p\n' 2>/dev/null | sort -nr | cut -d' ' -f2- | head -10 | xargs -r -d '\n' ls -lht
     echo
     read -p "View latest log? [y/N]: " -r reply
     if [[ "$reply" =~ ^[Yy]$ ]]; then
       local latest_log
-      latest_log=$(ls -t "$LOG_DIR"/ollamatrauma_*.log 2>/dev/null | head -1)
+      latest_log=$(find "$LOG_DIR" -maxdepth 1 -type f -name 'ollamatrauma_*.log' -printf '%T@ %p\n' 2>/dev/null | sort -nr | cut -d' ' -f2- | head -1)
       if [[ -n "$latest_log" ]]; then
         less "$latest_log"
       else
@@ -3195,7 +3345,8 @@ setup_container_runtime() {
       systemctl --user stop podman.service 2>/dev/null || true
       systemctl --user disable podman.socket 2>/dev/null || true
       sudo loginctl enable-linger "$USER" 2>/dev/null || true
-      export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+      uid=$(id -u)
+      export XDG_RUNTIME_DIR="/run/user/$uid"
       systemctl --user enable --now podman.socket 2>/dev/null || true
       log_success "Podman socket reset and restarted"
       pause
@@ -3458,7 +3609,7 @@ main() {
     exit 1
   fi
   
-  log_success "Found script: $(basename $(dirname $os_script))/$(basename $os_script)"
+  log_success "Found script: $(basename "$(dirname "$os_script")")/$(basename "$os_script")"
   echo
   
   # Setup the OS-specific script

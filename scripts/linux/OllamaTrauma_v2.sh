@@ -2902,7 +2902,8 @@ setup_container_runtime() {
       systemctl --user stop podman.service 2>/dev/null || true
       systemctl --user disable podman.socket 2>/dev/null || true
       sudo loginctl enable-linger "$USER" 2>/dev/null || true
-      export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+      uid=$(id -u)
+      export XDG_RUNTIME_DIR="/run/user/$uid"
       systemctl --user enable --now podman.socket 2>/dev/null || true
       log_success "Podman socket reset and restarted"
       pause

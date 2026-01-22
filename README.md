@@ -214,6 +214,27 @@ bash OllamaTrauma_v2.sh
 
 ---
 
+##  GPU setup
+
+- This repository supports multiple GPU-backed inference options. On machines with an NVIDIA GPU and CUDA, you can enable GPU-accelerated inference using one of the following approaches:
+
+  - Build `llama.cpp` with CUDA/`ggml-cuda` support and use the native binaries (low-latency, minimal dependencies).
+  - Use a Python-based stack (PyTorch + `vLLM` or `text-generation-webui`) to serve models over HTTP with CUDA support.
+
+We provide a helper script to clone `llama.cpp` and print recommended build steps:
+
+```bash
+bash scripts/setup_llama_cpp_cuda.sh
+```
+
+Notes:
+
+- The machine must have a compatible NVIDIA driver and CUDA toolkit installed (nvcc in PATH is recommended).
+- For Python-based servers, install a CUDA-enabled `torch` build or use `conda`/`mamba` to install the correct wheel for your CUDA version.
+- After building or installing, prefer quantized GGUF models (4/8-bit) to fit within VRAM and maximize throughput.
+
+---
+
 ##  Installation
 
 ### Option 1: Direct Run (Recommended)
