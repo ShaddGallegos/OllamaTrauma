@@ -16,15 +16,28 @@ Requires: `huggingface_hub` (already listed in requirements.txt)
 import sys
 import argparse
 import time
-from huggingface_hub import HfApi
 
-api = HfApi()
+# lazy import of huggingface_hub to avoid editor/CI import errors when the package isn't available
+api = None
+
+
+def ensure_api():
+    global api
+    if api is None:
+        try:
+            from huggingface_hub import HfApi as _HfApi
+            api = _HfApi()
+        except Exception:
+            print("Error: huggingface_hub is not installed; install with: pip install huggingface_hub")
+            sys.exit(1)
+
 
 FETCH_LIMIT = 80
 TOP_N = 10
 
 
 def get_downloads_safe(repo_id):
+    ensure_api()
     try:
         info = api.model_info(repo_id)
         # some versions expose .downloads, some in ._json or .to_dict(); handle defensively
@@ -44,6 +57,7 @@ def get_downloads_safe(repo_id):
 
 
 def get_likes_safe(repo_id):
+    ensure_api()
     try:
         info = api.model_info(repo_id)
         if hasattr(info, "likes") and info.likes is not None:
@@ -60,39 +74,55 @@ def get_likes_safe(repo_id):
 
 
 def get_lastmodified_safe(repo_id):
+    ensure_api()
     try:
         info = api.model_info(repo_id)
         t = getattr(info, "lastModified", None)
         if t:
-            # try to parse common ISO formats
-            try:
-                from dateutil import parser
-
-                try:
-                    return parser.parse(t)
-                except Exception:
-                    pass
-            except Exception:
-                pass
-            # fallback to datetime.fromisoformat if available
+            # try to parse common ISO/RFC3339 formats using only the stdlib (avoid external dateutil dependency)
             try:
                 import datetime
 
-                return datetime.datetime.fromisoformat(t.replace('Z', '+00:00'))
+                s = t
+                # normalize 'Z' timezone
+                if isinstance(s, str) and s.endswith("Z"):
+                    s = s.replace("Z", "+00:00")
+                # try fromisoformat first (handles many ISO/RFC3339 forms with offset)
+                try:
+                    return datetime.datetime.fromisoformat(s)
+                except Exception:
+                    pass
+                # try a few common strptime formats as fallback
+                fmts = [
+                    "%Y-%m-%dT%H:%M:%S.%f%z",
+                    "%Y-%m-%dT%H:%M:%S%z",
+                    "%Y-%m-%d %H:%M:%S%z",
+                    "%Y-%m-%dT%H:%M:%S.%f",
+                    "%Y-%m-%dT%H:%M:%S",
+                    "%Y-%m-%d %H:%M:%S",
+                ]
+                for fmt in fmts:
+                    try:
+                        return datetime.datetime.strptime(t, fmt)
+                    except Exception:
+                        continue
             except Exception:
-                return None
+                pass
+            return None
         return None
     except Exception:
         return None
 
 
 def search_by_name(keyword, fetch_limit=FETCH_LIMIT):
+    ensure_api()
     # huggingface_hub supports search param
     models = api.list_models(search=keyword, limit=fetch_limit)
     return models
 
 
 def search_by_tag(tag, fetch_limit=FETCH_LIMIT):
+    ensure_api()
     # list_models supports filter by pipeline_tag via filter argument in newer versions
     # We'll use naive search + tag filtering to be robust
     models = api.list_models(search=tag, limit=fetch_limit)
@@ -112,7 +142,7 @@ def search_by_tag(tag, fetch_limit=FETCH_LIMIT):
     return filtered
 
 
-def rank_models(models, top_n=TOP_N, sort_mode="composite"):
+def rank_models(models, top_n=TOP_N, sort_mode="composite", require_weights=False):
     """Rank models using different strategies.
 
     sort_mode: downloads | likes | composite
@@ -156,7 +186,7 @@ def rank_models(models, top_n=TOP_N, sort_mode="composite"):
     # recency in days: newer -> higher
     import datetime
 
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     recencies = []
     for x in items:
         if x["lastmod"]:
@@ -168,6 +198,28 @@ def rank_models(models, top_n=TOP_N, sort_mode="composite"):
             days = 365
         recencies.append(days)
     max_rec = max(recencies) if recencies else 1
+
+    # probe repo files for weight types and owner metadata
+    trusted_orgs = {"TheBloke", "stabilityai", "meta", "openai", "huggingface", "EleutherAI", "bigscience", "microsoft"}
+    for x in items:
+        repo = x["repo_id"]
+        weight_types = []
+        try:
+            files = api.list_repo_files(repo)
+            lower = [f.lower() for f in files]
+            if any(".gguf" in f for f in lower):
+                weight_types.append("gguf")
+            if any(f.endswith(".safetensors") for f in lower):
+                weight_types.append("safetensors")
+            if any("pytorch_model" in f or f.endswith(".bin") for f in lower):
+                weight_types.append("pytorch")
+        except Exception:
+            weight_types = []
+        x["weight_types"] = weight_types
+        try:
+            x["owner"] = repo.split("/")[0]
+        except Exception:
+            x["owner"] = ""
 
     scored = []
     for idx, x in enumerate(items):
@@ -181,15 +233,33 @@ def rank_models(models, top_n=TOP_N, sort_mode="composite"):
             tag_boost += 0.2
         if "transformers" in low_tags:
             tag_boost += 0.15
-        # weights: downloads 0.5, likes 0.3, recency 0.2
-        score = dl_norm * 0.5 + likes_norm * 0.3 + rec_norm * 0.2 + tag_boost
+        # boost if weights present (prefer models with gguf/safetensors/pytorch for local use)
+        weight_boost = 0
+        if x.get("weight_types"):
+            if "gguf" in x["weight_types"]:
+                weight_boost += 0.35
+            if "safetensors" in x["weight_types"]:
+                weight_boost += 0.2
+            if "pytorch" in x["weight_types"]:
+                weight_boost += 0.1
+
+        owner_boost = 0
+        if x.get("owner") in trusted_orgs:
+            owner_boost = 0.25
+
+        # weights: downloads 0.45, likes 0.25, recency 0.15
+        score = dl_norm * 0.45 + likes_norm * 0.25 + rec_norm * 0.15 + tag_boost + weight_boost + owner_boost
         scored.append((score, x["repo_id"], x["model"], x))
 
     scored.sort(reverse=True, key=lambda x: x[0])
     # prepare output with representative metric (composite score -> show downloads for context)
+    # optionally filter to only models that have weights
+    if require_weights:
+        scored = [s for s in scored if s[3].get("weight_types")]
+
     out = []
     for s, repo_id, m, meta in scored[:top_n]:
-        out.append((int(meta["downloads"]), repo_id, m))
+        out.append((int(meta.get("downloads", 0)), repo_id, m, meta))
     return out
 
 
@@ -198,11 +268,24 @@ def show_top_list(scored_list):
         print("No models found.")
         return
     print("\nTop models:")
-    for i, (dl, repo_id, m) in enumerate(scored_list, start=1):
+    for i, item in enumerate(scored_list, start=1):
+        # support returned tuples with meta
+        if len(item) == 4:
+            dl, repo_id, m, meta = item
+        else:
+            dl, repo_id, m = item
+            meta = {}
         name = getattr(m, "modelId", repo_id)
-        card = getattr(m, "cardData", None)
         short = getattr(m, "pipeline_tag", "") or (m.tags[0] if getattr(m, "tags", None) else "")
-        print(f"{i}. {name} — downloads: {dl} — tag: {short}")
+        weights = ",".join(meta.get("weight_types", [])) if meta else ""
+        likes = meta.get("likes") if meta else None
+        extras = []
+        if weights:
+            extras.append(f"weights:{weights}")
+        if likes is not None:
+            extras.append(f"likes:{likes}")
+        extras_s = f" ({'; '.join(extras)})" if extras else ""
+        print(f"{i}. {name} — downloads: {dl} — tag: {short}{extras_s}")
 
     print("\nEnter a number to view details, or 0 to go back.")
     while True:
@@ -214,21 +297,33 @@ def show_top_list(scored_list):
             continue
         idx = int(choice)
         if 1 <= idx <= len(scored_list):
-            dl, repo_id, m = scored_list[idx - 1]
-            show_model_detail(repo_id, m, dl)
+            sel = scored_list[idx - 1]
+            if len(sel) == 4:
+                dl, repo_id, m, meta = sel
+            else:
+                dl, repo_id, m = sel
+                meta = {}
+            show_model_detail(repo_id, m, dl, meta)
             print("\nBack to list — choose another number or 0 to go back.")
         else:
             print("Out of range; try again.")
 
 
-def show_model_detail(repo_id, m, downloads):
+def show_model_detail(repo_id, m, downloads, meta=None):
     print("\n--- Model Detail ---")
     print(f"ID: {repo_id}")
     print(f"Downloads: {downloads}")
     print(f"Type: {getattr(m, 'type', '')}")
     print(f"Tags: {', '.join(getattr(m, 'tags', []) or [])}")
     print(f"Pipeline tag: {getattr(m, 'pipeline_tag', '')}")
-    print(f"Last modified: {getattr(m, 'lastModified', '')}")
+    if meta:
+        print(f"Likes: {meta.get('likes', '')}")
+        print(f"Weight types: {', '.join(meta.get('weight_types', []) or [])}")
+        print(f"Owner: {meta.get('owner', '')}")
+        lm = meta.get('lastmod') or getattr(m, 'lastModified', '')
+        print(f"Last modified: {lm}")
+    else:
+        print(f"Last modified: {getattr(m, 'lastModified', '')}")
     print("--- End ---\n")
 
 
@@ -247,16 +342,16 @@ def interactive_menu():
             if keyword == "0":
                 continue
             print(f"Searching for name keyword: {keyword}...")
-                models = search_by_name(keyword)
-                scored = rank_models(models, top_n=TOP_N, sort_mode="composite")
+            models = search_by_name(keyword)
+            scored = rank_models(models, top_n=TOP_N, sort_mode="composite")
             show_top_list(scored)
         elif choice == "2":
             tag = input("Enter tag keyword (or 0 to cancel): ").strip()
             if tag == "0":
                 continue
             print(f"Searching for tag: {tag}...")
-                models = search_by_tag(tag)
-                scored = rank_models(models, top_n=TOP_N, sort_mode="composite")
+            models = search_by_tag(tag)
+            scored = rank_models(models, top_n=TOP_N, sort_mode="composite")
             show_top_list(scored)
         else:
             print("Invalid choice — enter 0, 1 or 2.")
@@ -281,15 +376,16 @@ if __name__ == "__main__":
     parser.add_argument("--sort", choices=["composite", "downloads", "likes"], default="composite", help="Ranking strategy for results")
     parser.add_argument("--limit", type=int, default=FETCH_LIMIT, help="How many model candidates to fetch from HF before ranking")
     parser.add_argument("--top", type=int, default=TOP_N, help="How many top results to show")
+    parser.add_argument("--require-weights", action="store_true", help="Only show models that include downloadable weight files (gguf/safetensors/bin)")
     args = parser.parse_args()
     if args.name:
         models = search_by_name(args.name, fetch_limit=args.limit)
-        scored = rank_models(models, top_n=args.top, sort_mode=args.sort)
+        scored = rank_models(models, top_n=args.top, sort_mode=args.sort, require_weights=args.require_weights)
         show_top_list(scored)
         sys.exit(0)
     if args.tag:
         models = search_by_tag(args.tag, fetch_limit=args.limit)
-        scored = rank_models(models, top_n=args.top, sort_mode=args.sort)
+        scored = rank_models(models, top_n=args.top, sort_mode=args.sort, require_weights=args.require_weights)
         show_top_list(scored)
         sys.exit(0)
 
