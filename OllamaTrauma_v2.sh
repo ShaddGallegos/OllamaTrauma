@@ -1378,107 +1378,169 @@ stop_runner() {
 health_check_dashboard() {
   while true; do
     show_banner
-    echo "Health Check Dashboard"
-    echo "==========================================================="
+    printf "Health Check Dashboard\n"
+    printf "===========================================================\n"
     echo
     
     # System Resources
     echo "${CYAN}[SYSTEM RESOURCES]${NC}"
     echo "─────────────────────────────────────────────────────────"
+    # CPU usage - sample /proc/stat for a short interval for accurate percentage
     local cpu_usage
-    cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
-    echo "  CPU Usage: ${cpu_usage}%"
+    if [[ -r /proc/stat ]]; then
+      read -r _ user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat
+      local prev_idle=$idle
+      local prev_total=$((user+nice+system+idle+iowait+irq+softirq+steal+guest+guest_nice))
+      sleep 0.1
+      read -r _ user2 nice2 system2 idle2 iowait2 irq2 softirq2 steal2 guest2 guest_nice2 < /proc/stat
+      local total2=$((user2+nice2+system2+idle2+iowait2+irq2+softirq2+steal2+guest2+guest_nice2))
+      local idle_delta=$((idle2 - prev_idle))
+      local total_delta=$((total2 - prev_total))
+      if [[ $total_delta -gt 0 ]]; then
+        cpu_usage=$(awk "BEGIN{printf \"%.1f\", (1 - $idle_delta/$total_delta)*100}")
+      else
+        cpu_usage=0.0
+      fi
+    else
+      cpu_usage="N/A"
+    fi
+    printf "  CPU Usage: %s%%\n" "$cpu_usage"
     
-    local mem_info
-    mem_info=$(free -h | awk 'NR==2{printf "  Memory: %s / %s (%.0f%%)", $3, $2, $3/$2 * 100}')
-    echo "$mem_info"
+    # Memory: use /proc/meminfo for stable values
+    if [[ -r /proc/meminfo ]]; then
+      local mem_total_kb mem_avail_kb mem_used_kb mem_pct
+      mem_total_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+      mem_avail_kb=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
+      mem_used_kb=$((mem_total_kb - mem_avail_kb))
+      if [[ $mem_total_kb -gt 0 ]]; then
+        mem_pct=$(awk "BEGIN{printf \"%.0f\", ($mem_used_kb/$mem_total_kb)*100}")
+      else
+        mem_pct=0
+      fi
+      # Convert to human-readable
+      local mem_used_hr mem_total_hr
+      mem_used_hr=$(numfmt --to=iec --suffix=B $((mem_used_kb*1024)) 2>/dev/null || echo "$((mem_used_kb/1024))Mi")
+      mem_total_hr=$(numfmt --to=iec --suffix=B $((mem_total_kb*1024)) 2>/dev/null || echo "$((mem_total_kb/1024))Mi")
+      printf "  Memory: %s / %s (%s%%)\n" "$mem_used_hr" "$mem_total_hr" "$mem_pct"
+    else
+      echo "  Memory: N/A"
+    fi
     
-    local disk_info
-    disk_info=$(df -h "${PROJECT_ROOT}" | awk 'NR==2{printf "  Disk: %s / %s (%s)", $3, $2, $5}')
-    echo "$disk_info"
+    # Disk usage for project root
+    if df -h "${PROJECT_ROOT}" >/dev/null 2>&1; then
+      local disk_info
+      disk_info=$(df -h "${PROJECT_ROOT}" | awk 'NR==2{printf "%s / %s (%s)", $3, $2, $5}')
+      printf "  Disk: %s\n" "$disk_info"
+    else
+      echo "  Disk: N/A"
+    fi
     
-    local load_avg
-    load_avg=$(uptime | awk -F'load average:' '{print $2}')
-    echo "  Load Average:$load_avg"
+    # Load average (1/5/15min)
+    local load1 load5 load15
+    read -r load1 load5 load15 _ < <(awk '{print $1,$2,$3}' /proc/loadavg)
+    printf "  Load Average: %s, %s, %s\n" "$load1" "$load5" "$load15"
     echo
     
     # AI Runners Status
     echo "${CYAN}[AI RUNNERS]${NC}"
     echo "─────────────────────────────────────────────────────────"
     
+    # Helper: check listening ports (ss preferred)
+    is_port_listening() {
+      local port=$1
+      if command -v ss >/dev/null 2>&1; then
+        ss -ltn '( sport = :'"$port"' )' 2>/dev/null | grep -q LISTEN && return 0 || return 1
+      elif command -v netstat >/dev/null 2>&1; then
+        netstat -tln 2>/dev/null | awk '{print $4}' | grep -E ":$port$" >/dev/null && return 0 || return 1
+      else
+        return 1
+      fi
+    }
+
     # Ollama
     if command -v ollama &>/dev/null; then
-      if systemctl is-active --quiet ollama 2>/dev/null; then
-        echo "  ${GREEN}OK${NC} Ollama: Running (port 11434)"
-        if netstat -tuln 2>/dev/null | grep -q ":11434 "; then
-          echo "    → http://localhost:11434"
+      if systemctl is-active --quiet ollama 2>/dev/null || pgrep -f "ollama" >/dev/null 2>&1 || is_port_listening 11434; then
+        printf "  %sOK%s Ollama: Running (port 11434)\n" "$GREEN" "$NC"
+        if is_port_listening 11434; then
+          printf "    → http://localhost:11434\n"
         fi
       else
-        echo "  ${YELLOW}${NC} Ollama: Installed, not running"
+        printf "  %sInstalled%s Ollama: Installed, not running\n" "$YELLOW" "$NC"
       fi
     else
-      echo "  ${RED}${NC} Ollama: Not installed"
+      printf "  %sNot installed%s Ollama: Not installed\n" "$RED" "$NC"
     fi
     
     # LocalAI
-    if [[ -n "$CONTAINER_CMD" ]]; then
-      if $CONTAINER_CMD ps --filter name=localai --format '{{.Status}}' 2>/dev/null | grep -q "Up"; then
-        echo "  ${GREEN}OK${NC} LocalAI: Running (port 8080)"
-        echo "    → http://localhost:8080"
+    # LocalAI: check container or listening port
+    if is_port_listening 8080 || pgrep -f localai >/dev/null 2>&1; then
+      printf "  %sOK%s LocalAI: Running (port 8080)\n" "$GREEN" "$NC"
+      if is_port_listening 8080; then
+        printf "    → http://localhost:8080\n"
+      fi
+    else
+      # try container images if container cmd present
+      if [[ -n "$CONTAINER_CMD" ]] && $CONTAINER_CMD images 2>/dev/null | grep -q "localai\|local-ai"; then
+        printf "  %sInstalled%s LocalAI: Installed, not running\n" "$YELLOW" "$NC"
       else
-        if $CONTAINER_CMD images | grep -q "local-ai"; then
-          echo "  ${YELLOW}${NC} LocalAI: Installed, not running"
-        else
-          echo "  ${RED}${NC} LocalAI: Not installed"
-        fi
+        printf "  %sNot installed%s LocalAI: Not installed\n" "$RED" "$NC"
       fi
     fi
     
     # llama.cpp
-    if [[ -f "${LLAMACPP_DIR}/main" ]]; then
-      echo "  ${GREEN}OK${NC} llama.cpp: Installed"
-      echo "    → ${LLAMACPP_DIR}"
+    if [[ -d "${LLAMACPP_DIR}" ]]; then
+      printf "  %sOK%s llama.cpp: Installed\n" "$GREEN" "$NC"
+      printf "    → %s\n" "${LLAMACPP_DIR}"
     else
-      echo "  ${RED}${NC} llama.cpp: Not installed"
+      printf "  %sNot installed%s llama.cpp: Not installed\n" "$RED" "$NC"
     fi
     
     # text-generation-webui
     if [[ -d "$TEXTGEN_DIR" ]]; then
-      if pgrep -f "text-generation-webui" &>/dev/null; then
-        echo "  ${GREEN}OK${NC} text-gen-webui: Running"
+      if is_port_listening 7860 || pgrep -f "text-generation-webui" &>/dev/null; then
+        printf "  %sOK%s text-gen-webui: Running\n" "$GREEN" "$NC"
       else
-        echo "  ${YELLOW}${NC} text-gen-webui: Installed, not running"
+        printf "  %sInstalled%s text-gen-webui: Installed, not running\n" "$YELLOW" "$NC"
       fi
     else
-      echo "  ${RED}${NC} text-gen-webui: Not installed"
+      printf "  %sNot installed%s text-gen-webui: Not installed\n" "$RED" "$NC"
     fi
     echo
     
     # Models
     echo "${CYAN}[MODELS]${NC}"
     echo "─────────────────────────────────────────────────────────"
+    # Models
     if command -v ollama &>/dev/null; then
       local model_count
-      model_count=$(ollama list 2>/dev/null | tail -n +2 | wc -l)
-      echo "  Ollama Models: $model_count"
+      model_count=$(ollama list 2>/dev/null | tail -n +2 | wc -l || echo 0)
+      printf "  Ollama Models: %s\n" "$model_count"
+    else
+      printf "  Ollama Models: 0\n"
     fi
     
     if [[ -d "${PROJECT_ROOT}/data/models" ]]; then
       local local_models
       local_models=$(find "${PROJECT_ROOT}/data/models" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
-      echo "  Local Models: $local_models"
+      printf "  Local Models: %s\n" "$local_models"
+    else
+      printf "  Local Models: 0\n"
     fi
     echo
     
     # Active Ports
     echo "${CYAN}[ACTIVE PORTS]${NC}"
     echo "─────────────────────────────────────────────────────────"
-    if command -v netstat &>/dev/null; then
-      netstat -tuln 2>/dev/null | grep -E ":(8080|11434|7860|5000)" | awk '{print "  " $4}' || echo "  No AI services detected"
-    elif command -v ss &>/dev/null; then
-      ss -tuln 2>/dev/null | grep -E ":(8080|11434|7860|5000)" | awk '{print "  " $5}' || echo "  No AI services detected"
-    else
-      echo "  (netstat/ss not available)"
+    # Active ports - look for commonly used AI service ports
+    local ports_found=0
+    for p in 11434 8080 7860 5000; do
+      if is_port_listening "$p"; then
+        printf "  %s: Listening\n" "$p"
+        ports_found=1
+      fi
+    done
+    if [[ $ports_found -eq 0 ]]; then
+      echo "  No AI services detected"
     fi
     echo
     
