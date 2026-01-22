@@ -1249,7 +1249,7 @@ After bootstrap, the main menu will offer options for:
 ### Quick model search and install
 ```bash
 # Search HF for coding models
-python3 scripts/hf_search.py "coding assistant" --limit 10
+python3 scripts/python/hf_model_search.py --name "coding assistant" --limit 10
 
 # Clone a specific GGUF model
 git clone https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF
