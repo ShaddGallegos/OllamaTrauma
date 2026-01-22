@@ -2816,31 +2816,78 @@ models_menu() {
     echo "Model Management"
     echo "==========================================================="
     echo
-    echo "  Download & Setup:"
-    echo "    1) Interactive Model Selector (Popular Models)"
-    echo "    2) Download Model from Hugging Face"
-    echo "    3) Batch Download Setup Helper"
-    echo "    4) Batch Download Models"
-    echo "    5) Monitor Download Progress"
-    echo
-    echo "  Model Operations:"
-    echo "    6) List Available Models"
-    echo "    7) Convert Model to Ollama Format"
-    echo "    8) Remove Model Files"
-    echo
-    echo "  Analysis & Optimization:"
-    echo "    9) Model Performance Benchmark"
-    echo "    10) Model Comparison Tool"
-    echo "    11) Get Model Recommendations"
-    echo
-    echo "  Code Assistants:"
-    echo "    12) Install Code Assistant Bundle (Ollama)"
-    echo "    13) Run Code Assistant (Ollama)"
-    echo "    14) Search Hugging Face (interactive CLI)"
-    echo
+    echo "  1) Downloads & Setup (submenu)"
+    echo "  2) Model Operations & Management"
+    echo "  3) Analysis & Recommendations"
+    echo "  4) Code Assistants"
     echo "  0) Back to Main Menu"
     echo
-    read -p "Select option [0-14]: " -r choice
+    read -p "Select option [0-4]: " -r choice
+
+    case "$choice" in
+      1) run_menu_action downloads_menu ;;
+      2)
+        show_banner
+        echo "Model Operations"
+        echo "1) List Available Models"
+        echo "2) Convert Model to Ollama Format"
+        echo "3) Remove Model Files"
+        read -p "Select option [1-3]: " -r subc
+        case "$subc" in
+          1) run_menu_action list_available_models ;;
+          2) run_menu_action convert_model_ollama ;;
+          3) run_menu_action remove_model_files ;;
+          *) log_error "Invalid option" ;;
+        esac
+        ;;
+      3)
+        show_banner
+        echo "Analysis & Recommendations"
+        echo "1) Model Performance Benchmark"
+        echo "2) Model Comparison Tool"
+        echo "3) Get Model Recommendations"
+        read -p "Select option [1-3]: " -r subc
+        case "$subc" in
+          1) run_menu_action benchmark_model ;;
+          2) run_menu_action compare_models ;;
+          3) run_menu_action recommend_models ;;
+          *) log_error "Invalid option" ;;
+        esac
+        ;;
+      4)
+        show_banner
+        echo "Code Assistants"
+        echo "1) Install Code Assistant Bundle (Ollama)"
+        echo "2) Run Code Assistant (Ollama)"
+        read -p "Select option [1-2]: " -r subc
+        case "$subc" in
+          1) run_menu_action install_code_assistants_bundle ;;
+          2) run_menu_action run_code_assistant ;;
+          *) log_error "Invalid option" ;;
+        esac
+        ;;
+      0) return 0 ;;
+      *) log_error "Invalid option" && sleep 1 ;;
+    esac
+  done
+}
+
+
+# Downloads submenu extracted from Models for clarity
+downloads_menu() {
+  while true; do
+    show_banner
+    echo "Model Downloads & Setup"
+    echo "==========================================================="
+    echo
+    echo "  1) Interactive Model Selector (Popular Models)"
+    echo "  2) Download Model from Hugging Face"
+    echo "  3) Batch Download Setup Helper"
+    echo "  4) Batch Download Models"
+    echo "  5) Monitor Download Progress"
+    echo "  0) Back to Models Menu"
+    echo
+    read -p "Select option [0-5]: " -r choice
 
     case "$choice" in
       1) run_menu_action interactive_model_selector ;;
@@ -2848,15 +2895,6 @@ models_menu() {
       3) run_menu_action setup_batch_download_helper ;;
       4) run_menu_action batch_download_models ;;
       5) run_menu_action monitor_batch_download ;;
-      6) run_menu_action list_available_models ;;
-      7) run_menu_action convert_model_ollama ;;
-      8) run_menu_action remove_model_files ;;
-      9) run_menu_action benchmark_model ;;
-      10) run_menu_action compare_models ;;
-      11) run_menu_action recommend_models ;;
-      12) run_menu_action install_code_assistants_bundle ;;
-      13) run_menu_action run_code_assistant ;;
-      14) run_menu_action run_hf_search_cli ;;
       0) return 0 ;;
       *) log_error "Invalid option" && sleep 1 ;;
     esac

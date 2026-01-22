@@ -1,89 +1,10 @@
 #!/usr/bin/env bash
-#
-# OllamaTrauma v2 - Unified Bootstrap + AI Runner Manager
-# Combines project initialization, dependency management, and AI runner operations
-# Supports: Ollama, LocalAI, llama.cpp, text-generation-webui
-# Container Runtime: Podman (preferred) or Docker
-#
+# Wrapper for platform-specific entrypoint: delegate to repo root `OllamaTrauma_v2.sh`
 
-# Ensure we're running with bash, not sh
-if [ -z "$BASH_VERSION" ]; then
-  echo "ERROR: This script requires bash, not sh"
-  echo "Please run with: bash $0"
-  exit 1
-fi
+set -euo pipefail
 
-set -uo pipefail
-IFS=$'\n\t'
-
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-readonly SCRIPT_VERSION="2.1.0"
-readonly PROJECT_NAME="OllamaTrauma"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly PROJECT_ROOT="${SCRIPT_DIR}"
-
-# Paths
-readonly LLAMACPP_DIR="${PROJECT_ROOT}/llama.cpp"
-readonly LOCALAI_CONTAINER="localai"
-readonly TEXTGEN_DIR="${PROJECT_ROOT}/text-generation-webui"
-readonly BACKUP_DIR="${PROJECT_ROOT}/.backups"
-readonly LOG_DIR="${PROJECT_ROOT}/data/logs"
-readonly LOG_FILE="${LOG_DIR}/ollamatrauma_$(date +%Y%m%d_%H%M%S).log"
-readonly ERROR_LOG="${LOG_DIR}/ollamatrauma_errors_$(date +%Y%m%d_%H%M%S).log"
-
-# Colors
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
-readonly MAGENTA='\033[0;35m'
-readonly NC='\033[0m'
-
-# OS Detection
-OS=""
-OS_VERSION=""
-PACKAGE_MANAGER=""
-
-# Container runtime - Podman is preferred (rootless capable), Docker as fallback
-CONTAINER_CMD=""
-
-# Lock file - use /tmp for better compatibility
-readonly LOCK_FILE="/tmp/ollamatrauma_${USER}.lock"
-readonly SCRIPT_PID=$$
-
-# ============================================================================
-# LOGGING FUNCTIONS
-# ============================================================================
-
-log_info() { 
-  echo -e "${GREEN}[INFO]${NC} $*" | tee -a "$LOG_FILE"
-}
-
-log_warn() { 
-  echo -e "${YELLOW}[WARN]${NC} $*" | tee -a "$LOG_FILE" "$ERROR_LOG" >&2
-}
-
-log_error() { 
-  echo -e "${RED}[ERROR]${NC} $*" | tee -a "$LOG_FILE" "$ERROR_LOG" >&2
-}
-
-log_step() { 
-  echo -e "${BLUE}[STEP]${NC} $*" | tee -a "$LOG_FILE"
-}
-
-log_success() {
-  echo -e "${GREEN}[OK]${NC} $*" | tee -a "$LOG_FILE"
-}
-
-log_debug() {
-  if [[ "${DEBUG:-0}" == "1" ]]; then
-    echo -e "${CYAN}[DEBUG]${NC} $*" | tee -a "$LOG_FILE"
-  fi
-}
-
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+exec "$ROOT_DIR/OllamaTrauma_v2.sh" "$@"
 # ============================================================================
 # DEBUG MODE FUNCTIONS
 # ============================================================================
@@ -1672,23 +1593,24 @@ download_model_huggingface() {
   show_banner
   log_step "Download Model from Hugging Face"
   echo
-  
-  if [[ ! -f "${PROJECT_ROOT}/scripts/hf_search.py" ]]; then
-    log_error "hf_search.py not found. Please run 'Initialize Project' first."
+
+  HF_CLI="${PROJECT_ROOT}/scripts/python/hf_model_search.py"
+  if [[ ! -f "${HF_CLI}" ]]; then
+    log_error "hf_model_search.py not found. Please run 'Initialize Project' first."
     pause
     return 1
   fi
-  
+
   read -p "Enter search query (e.g., 'llama', 'mistral'): " -r query
   if [[ -z "$query" ]]; then
     log_error "No query provided"
     pause
     return 1
   fi
-  
-  log_info "Searching Hugging Face..."
-  python3 "${PROJECT_ROOT}/scripts/hf_search.py" "$query"
-  
+
+  log_info "Searching Hugging Face (GGUF-only, <=7B)..."
+  python3 "${HF_CLI}" --name "$query" --sort composite --limit 200 --top 20 --require-weights --gguf-only --max-b 7
+
   echo
   read -p "Enter model ID to download (e.g., 'TheBloke/Llama-2-7B-GGUF'): " -r model_id
   if [[ -z "$model_id" ]]; then
@@ -1696,18 +1618,36 @@ download_model_huggingface() {
     pause
     return 1
   fi
-  
+
+  log_info "Validating model policy for: $model_id"
+  meta="$(python3 "${HF_CLI}" --inspect "${model_id}" --require-weights --gguf-only --max-b 7 2>/dev/null)"
+  # First line is a short verdict (ACCEPTABLE or REJECT...)
+  verdict="$(echo "$meta" | head -n1)"
+  if [[ -z "$meta" ]]; then
+    log_error "Failed to inspect model metadata; aborting."
+    pause
+    return 1
+  fi
+  if [[ "$verdict" != "ACCEPTABLE" ]]; then
+    echo "$verdict"
+    read -p "Model does not meet GGUF/laptop policy. Proceed with download anyway? [y/N]: " -r reply
+    if [[ ! "$reply" =~ ^[Yy]$ ]]; then
+      log_error "Download aborted by policy."
+      pause
+      return 1
+    fi
+  fi
+
   log_info "Downloading model: $model_id"
   mkdir -p "${PROJECT_ROOT}/data/models"
-  
-  # Use huggingface-cli to download
+
   if command -v huggingface-cli &>/dev/null; then
     huggingface-cli download "$model_id" --local-dir "${PROJECT_ROOT}/data/models/${model_id##*/}"
     log_success "Model downloaded to: ${PROJECT_ROOT}/data/models/${model_id##*/}"
   else
     log_error "huggingface-cli not found. Install with: pip install huggingface-hub"
   fi
-  
+
   pause
 }
 

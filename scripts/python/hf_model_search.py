@@ -16,6 +16,7 @@ Requires: `huggingface_hub` (already listed in requirements.txt)
 import sys
 import argparse
 import time
+import json
 
 # lazy import of huggingface_hub to avoid editor/CI import errors when the package isn't available
 api = None
@@ -396,13 +397,13 @@ def interactive_menu():
 
 def one_shot_name(keyword):
     models = search_by_name(keyword)
-    scored = rank_models(models, top_n=TOP_N, sort_mode="composite")
+    scored = rank_models(models, top_n=TOP_N, sort_mode="composite", require_weights=False)
     show_top_list(scored)
 
 
 def one_shot_tag(tag):
     models = search_by_tag(tag)
-    scored = rank_models(models, top_n=TOP_N, sort_mode="composite")
+    scored = rank_models(models, top_n=TOP_N, sort_mode="composite", require_weights=False)
     show_top_list(scored)
 
 
@@ -416,16 +417,58 @@ if __name__ == "__main__":
     parser.add_argument("--require-weights", action="store_true", help="Only show models that include downloadable weight files (gguf/safetensors/bin)")
     parser.add_argument("--gguf-only", action="store_true", help="Only show models that expose GGUF weight files")
     parser.add_argument("--max-b", type=float, default=None, help="Maximum model size in billions of parameters (e.g. 7 for 7B). If provided, models larger than this will be excluded unless they provide local weights).")
+    parser.add_argument("--inspect", help="Inspect a specific model id for weight files and suitability")
     args = parser.parse_args()
     if args.name:
         models = search_by_name(args.name, fetch_limit=args.limit)
-        scored = rank_models(models, top_n=args.top, sort_mode=args.sort, require_weights=args.require_weights)
+        scored = rank_models(models, top_n=args.top, sort_mode=args.sort, require_weights=args.require_weights, gguf_only=args.gguf_only, max_b=args.max_b)
         show_top_list(scored)
         sys.exit(0)
     if args.tag:
         models = search_by_tag(args.tag, fetch_limit=args.limit)
-        scored = rank_models(models, top_n=args.top, sort_mode=args.sort, require_weights=args.require_weights)
+        scored = rank_models(models, top_n=args.top, sort_mode=args.sort, require_weights=args.require_weights, gguf_only=args.gguf_only, max_b=args.max_b)
         show_top_list(scored)
+        sys.exit(0)
+
+    if args.inspect:
+        # Inspect a specific repo_id for weight files and whether it meets the provided policy
+        ensure_api()
+        repo = args.inspect
+        result = {"repo_id": repo, "weight_types": [], "owner": "", "size_b": None, "acceptable": False, "reasons": []}
+        try:
+            files = api.list_repo_files(repo)
+            lower = [f.lower() for f in files]
+            if any('.gguf' in f for f in lower):
+                result["weight_types"].append("gguf")
+            if any(f.endswith('.safetensors') for f in lower):
+                result["weight_types"].append("safetensors")
+            if any('pytorch_model' in f or f.endswith('.bin') for f in lower):
+                result["weight_types"].append("pytorch")
+        except Exception:
+            result["reasons"].append("failed_list_repo_files")
+        try:
+            result["owner"] = repo.split('/')[0]
+        except Exception:
+            pass
+        # try to infer size from repo id or tags
+        size_b = _parse_b_from_id(repo)
+        result["size_b"] = size_b
+
+        # apply policy
+        if args.gguf_only and 'gguf' not in result["weight_types"]:
+            result["reasons"].append("missing_gguf")
+        if args.require_weights and not result["weight_types"]:
+            result["reasons"].append("missing_weights")
+        if args.max_b is not None and size_b is not None and size_b > float(args.max_b):
+            result["reasons"].append("too_large")
+
+        result["acceptable"] = (len(result["reasons"]) == 0)
+        # Print a concise single-line verdict followed by JSON for programmatic use
+        if result["acceptable"]:
+            print("ACCEPTABLE")
+        else:
+            print("REJECT: " + ";".join(result["reasons"]))
+        print(json.dumps(result))
         sys.exit(0)
 
     interactive_menu()
