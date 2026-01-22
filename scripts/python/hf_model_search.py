@@ -43,6 +43,49 @@ def get_downloads_safe(repo_id):
         return 0
 
 
+def get_likes_safe(repo_id):
+    try:
+        info = api.model_info(repo_id)
+        if hasattr(info, "likes") and info.likes is not None:
+            return int(info.likes)
+        try:
+            j = info._json if hasattr(info, "_json") else {}
+            if isinstance(j, dict) and "likes" in j:
+                return int(j.get("likes", 0) or 0)
+        except Exception:
+            pass
+        return 0
+    except Exception:
+        return 0
+
+
+def get_lastmodified_safe(repo_id):
+    try:
+        info = api.model_info(repo_id)
+        t = getattr(info, "lastModified", None)
+        if t:
+            # try to parse common ISO formats
+            try:
+                from dateutil import parser
+
+                try:
+                    return parser.parse(t)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            # fallback to datetime.fromisoformat if available
+            try:
+                import datetime
+
+                return datetime.datetime.fromisoformat(t.replace('Z', '+00:00'))
+            except Exception:
+                return None
+        return None
+    except Exception:
+        return None
+
+
 def search_by_name(keyword, fetch_limit=FETCH_LIMIT):
     # huggingface_hub supports search param
     models = api.list_models(search=keyword, limit=fetch_limit)
@@ -69,25 +112,92 @@ def search_by_tag(tag, fetch_limit=FETCH_LIMIT):
     return filtered
 
 
-def rank_by_downloads(models, top_n=TOP_N):
-    scored = []
+def rank_models(models, top_n=TOP_N, sort_mode="composite"):
+    """Rank models using different strategies.
+
+    sort_mode: downloads | likes | composite
+    composite blends downloads, likes, recency and tag boosts.
+    """
+    items = []
+    # fetch metrics for each candidate
     for m in models:
         repo_id = getattr(m, "modelId", None) or getattr(m, "id", None) or getattr(m, "modelId", None)
         if not repo_id:
             continue
         downloads = get_downloads_safe(repo_id)
-        scored.append((downloads, repo_id, m))
-        # be polite to the API
+        likes = get_likes_safe(repo_id)
+        lastmod = get_lastmodified_safe(repo_id)
+        tags = set()
+        try:
+            if getattr(m, "pipeline_tag", None):
+                tags.add(getattr(m, "pipeline_tag", ""))
+            if getattr(m, "tags", None):
+                tags.update(getattr(m, "tags", []))
+        except Exception:
+            pass
+        items.append({"repo_id": repo_id, "model": m, "downloads": downloads, "likes": likes, "lastmod": lastmod, "tags": tags})
         time.sleep(0.1)
+
+    if not items:
+        return []
+
+    if sort_mode == "downloads":
+        items.sort(key=lambda x: x["downloads"], reverse=True)
+        return [(x["downloads"], x["repo_id"], x["model"]) for x in items[:top_n]]
+
+    if sort_mode == "likes":
+        items.sort(key=lambda x: x["likes"], reverse=True)
+        return [(x["likes"], x["repo_id"], x["model"]) for x in items[:top_n]]
+
+    # composite scoring
+    # normalize components
+    max_dl = max((x["downloads"] for x in items), default=1)
+    max_likes = max((x["likes"] for x in items), default=1)
+    # recency in days: newer -> higher
+    import datetime
+
+    now = datetime.datetime.utcnow()
+    recencies = []
+    for x in items:
+        if x["lastmod"]:
+            try:
+                days = max(0, (now - x["lastmod"]).days)
+            except Exception:
+                days = 365
+        else:
+            days = 365
+        recencies.append(days)
+    max_rec = max(recencies) if recencies else 1
+
+    scored = []
+    for idx, x in enumerate(items):
+        dl_norm = x["downloads"] / max_dl if max_dl > 0 else 0
+        likes_norm = x["likes"] / max_likes if max_likes > 0 else 0
+        recency_days = recencies[idx]
+        rec_norm = (max_rec - recency_days) / max_rec if max_rec > 0 else 0
+        tag_boost = 0
+        low_tags = {t.lower() for t in x["tags"] if t}
+        if "text-generation" in low_tags or "text-generation" in (getattr(x["model"], "pipeline_tag", "") or ""):
+            tag_boost += 0.2
+        if "transformers" in low_tags:
+            tag_boost += 0.15
+        # weights: downloads 0.5, likes 0.3, recency 0.2
+        score = dl_norm * 0.5 + likes_norm * 0.3 + rec_norm * 0.2 + tag_boost
+        scored.append((score, x["repo_id"], x["model"], x))
+
     scored.sort(reverse=True, key=lambda x: x[0])
-    return scored[:top_n]
+    # prepare output with representative metric (composite score -> show downloads for context)
+    out = []
+    for s, repo_id, m, meta in scored[:top_n]:
+        out.append((int(meta["downloads"]), repo_id, m))
+    return out
 
 
 def show_top_list(scored_list):
     if not scored_list:
         print("No models found.")
         return
-    print("\nTop models (by downloads):")
+    print("\nTop models:")
     for i, (dl, repo_id, m) in enumerate(scored_list, start=1):
         name = getattr(m, "modelId", repo_id)
         card = getattr(m, "cardData", None)
@@ -137,16 +247,16 @@ def interactive_menu():
             if keyword == "0":
                 continue
             print(f"Searching for name keyword: {keyword}...")
-            models = search_by_name(keyword)
-            scored = rank_by_downloads(models)
+                models = search_by_name(keyword)
+                scored = rank_models(models, top_n=TOP_N, sort_mode="composite")
             show_top_list(scored)
         elif choice == "2":
             tag = input("Enter tag keyword (or 0 to cancel): ").strip()
             if tag == "0":
                 continue
             print(f"Searching for tag: {tag}...")
-            models = search_by_tag(tag)
-            scored = rank_by_downloads(models)
+                models = search_by_tag(tag)
+                scored = rank_models(models, top_n=TOP_N, sort_mode="composite")
             show_top_list(scored)
         else:
             print("Invalid choice — enter 0, 1 or 2.")
@@ -154,13 +264,13 @@ def interactive_menu():
 
 def one_shot_name(keyword):
     models = search_by_name(keyword)
-    scored = rank_by_downloads(models)
+    scored = rank_models(models, top_n=TOP_N, sort_mode="composite")
     show_top_list(scored)
 
 
 def one_shot_tag(tag):
     models = search_by_tag(tag)
-    scored = rank_by_downloads(models)
+    scored = rank_models(models, top_n=TOP_N, sort_mode="composite")
     show_top_list(scored)
 
 
@@ -168,13 +278,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Hugging Face model search CLI")
     parser.add_argument("--name", help="Search by name keyword (one-shot)")
     parser.add_argument("--tag", help="Search by tag keyword (one-shot)")
+    parser.add_argument("--sort", choices=["composite", "downloads", "likes"], default="composite", help="Ranking strategy for results")
+    parser.add_argument("--limit", type=int, default=FETCH_LIMIT, help="How many model candidates to fetch from HF before ranking")
+    parser.add_argument("--top", type=int, default=TOP_N, help="How many top results to show")
     args = parser.parse_args()
-
     if args.name:
-        one_shot_name(args.name)
+        models = search_by_name(args.name, fetch_limit=args.limit)
+        scored = rank_models(models, top_n=args.top, sort_mode=args.sort)
+        show_top_list(scored)
         sys.exit(0)
     if args.tag:
-        one_shot_tag(args.tag)
+        models = search_by_tag(args.tag, fetch_limit=args.limit)
+        scored = rank_models(models, top_n=args.top, sort_mode=args.sort)
+        show_top_list(scored)
         sys.exit(0)
 
     interactive_menu()

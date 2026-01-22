@@ -77,11 +77,17 @@ python3 scripts/python/hf_model_search.py
 One-shot searches:
 
 ```bash
-python3 scripts/python/hf_model_search.py --name "gpt"
-python3 scripts/python/hf_model_search.py --tag "text-generation"
+python3 scripts/python/hf_model_search.py --name "gpt" --sort composite --limit 100 --top 10
+python3 scripts/python/hf_model_search.py --tag "text-generation" --sort downloads --limit 200 --top 20
 ```
 
-The CLI returns the top 10 models by downloads for your query. Menus use `0` to go back or exit.
+The CLI supports additional flags for ranking and result limits. Menus use `0` to go back or exit.
+
+CLI flags (one-shot):
+
+- `--sort`: ranking strategy: `composite` (default), `downloads`, or `likes`.
+- `--limit`: how many candidate models to fetch before ranking (default 80).
+- `--top`: how many results to display (default 10).
 
 Interactive menu paths (for reference once inside the app):
 
