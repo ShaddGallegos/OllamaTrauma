@@ -151,6 +151,86 @@ detect_gpus() {
   fi
 }
 
+# Attempt to install/configure NVIDIA runtime components when an NVIDIA GPU is present.
+# This is conservative: drivers are OS-specific and may require a reboot, so we only
+# attempt to install the container toolkit and provide guidance for driver install.
+install_nvidia_components() {
+  log_step "Ensuring NVIDIA container/driver components"
+
+  # Ensure we know the OS/package manager
+  detect_os || true
+
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    log_info "NVIDIA drivers already present (nvidia-smi available)"
+  else
+    log_warn "nvidia-smi not found — NVIDIA driver not detected. Driver install is interactive and may require reboot."
+    echo
+    read -r -p "Attempt to install NVIDIA drivers and CUDA (may require sudo/reboot)? [y/N]: " _ans
+    if [[ "${_ans,,}" != "y" ]]; then
+      log_info "Skipping automatic NVIDIA driver install. Please install drivers manually and re-run."
+    else
+      case "${OS,,}" in
+        ubuntu|debian)
+          log_info "Running apt-based NVIDIA helper (ubuntu/debian)"
+          sudo apt update || true
+          sudo apt install -y ubuntu-drivers-common || true
+          sudo ubuntu-drivers autoinstall || true
+          ;;
+        fedora|centos|rhel)
+          log_info "Running dnf/yum-based NVIDIA helper (fedora/rhel/centos)"
+          if command -v dnf >/dev/null 2>&1; then
+            sudo dnf -y install akmod-nvidia || true
+          else
+            sudo yum -y install kmod-nvidia || true
+          fi
+          ;;
+        arch)
+          log_info "Arch/Manjaro detected — installing via pacman"
+          sudo pacman -Syu --noconfirm nvidia nvidia-utils || true
+          ;;
+        *)
+          log_warn "Automatic driver install is not supported for OS: ${OS}. Please follow vendor instructions."
+          ;;
+      esac
+    fi
+  fi
+
+  # Install/configure nvidia-container-toolkit (Docker/Podman support)
+  if command -v nvidia-container-cli >/dev/null 2>&1 || command -v nvidia-container-runtime >/dev/null 2>&1; then
+    log_info "nvidia container runtime/tooling already present"
+  else
+    log_info "Attempting to install nvidia-container-toolkit for container runtimes"
+    case "${OS,,}" in
+      ubuntu|debian)
+        sudo apt update || true
+        sudo apt install -y nvidia-container-toolkit || true
+        sudo systemctl restart docker || true
+        ;;
+      fedora|centos|rhel)
+        if command -v dnf >/dev/null 2>&1; then
+          sudo dnf install -y nvidia-container-toolkit || true
+        else
+          sudo yum install -y nvidia-container-toolkit || true
+        fi
+        ;;
+      arch)
+        sudo pacman -Syu --noconfirm nvidia-container-toolkit || true
+        ;;
+      *)
+        log_warn "Automatic nvidia-container-toolkit install not available for OS: ${OS}"
+        ;;
+    esac
+    log_info "If you are using Podman, ensure the OCI hooks are configured per the toolkit docs."
+  fi
+
+  # Final check
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    log_success "NVIDIA components appear installed and available"
+  else
+    log_warn "nvidia-smi still not available — you may need to reboot or complete driver install manually."
+  fi
+}
+
 gpu_runonce_setup() {
   # Ensure data directories exist
   mkdir -p "${PROJECT_ROOT}/data" "${PROJECT_ROOT}/data/logs" || true
@@ -172,6 +252,11 @@ gpu_runonce_setup() {
     log_info "No GPU detected; skipping GPU run-once build. Creating marker to avoid repeated checks."
     touch "${GPU_RUNONCE_MARKER}" || true
     return 0
+  fi
+
+  # If NVIDIA GPU, attempt to ensure container/toolkit and optionally drivers
+  if [[ "${GPU_VENDOR}" == "nvidia" ]]; then
+    install_nvidia_components || log_warn "install_nvidia_components reported issues or was skipped"
   fi
 
   log_step "Starting GPU run-once setup: cloning/building llama.cpp with CUDA support"
