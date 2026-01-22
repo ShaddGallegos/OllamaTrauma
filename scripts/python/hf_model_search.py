@@ -142,7 +142,20 @@ def search_by_tag(tag, fetch_limit=FETCH_LIMIT):
     return filtered
 
 
-def rank_models(models, top_n=TOP_N, sort_mode="composite", require_weights=False):
+def _parse_b_from_id(repo_id):
+    # heuristic: look for patterns like '7b', '13B', '3.5b'
+    import re
+
+    m = re.search(r"(\d+(?:\.\d+)?)\s*[bB]\b", repo_id)
+    if m:
+        try:
+            return float(m.group(1))
+        except Exception:
+            return None
+    return None
+
+
+def rank_models(models, top_n=TOP_N, sort_mode="composite", require_weights=False, gguf_only=False, max_b=None):
     """Rank models using different strategies.
 
     sort_mode: downloads | likes | composite
@@ -220,6 +233,30 @@ def rank_models(models, top_n=TOP_N, sort_mode="composite", require_weights=Fals
             x["owner"] = repo.split("/")[0]
         except Exception:
             x["owner"] = ""
+
+    # apply filters: gguf_only and max_b
+    if gguf_only:
+        items = [it for it in items if it.get("weight_types") and "gguf" in it.get("weight_types")]
+
+    if max_b is not None:
+        filtered = []
+        for it in items:
+            size_b = _parse_b_from_id(it["repo_id"]) or None
+            # try tags for sizes
+            if size_b is None:
+                for t in it.get("tags", []):
+                    size_b = _parse_b_from_id(t) or size_b
+            # include if size known and <= max_b
+            if size_b is not None:
+                if size_b <= float(max_b):
+                    filtered.append(it)
+                else:
+                    continue
+            else:
+                # if unknown size, allow only if weights present (gguf/safetensors)
+                if it.get("weight_types"):
+                    filtered.append(it)
+        items = filtered
 
     scored = []
     for idx, x in enumerate(items):
@@ -377,6 +414,8 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, default=FETCH_LIMIT, help="How many model candidates to fetch from HF before ranking")
     parser.add_argument("--top", type=int, default=TOP_N, help="How many top results to show")
     parser.add_argument("--require-weights", action="store_true", help="Only show models that include downloadable weight files (gguf/safetensors/bin)")
+    parser.add_argument("--gguf-only", action="store_true", help="Only show models that expose GGUF weight files")
+    parser.add_argument("--max-b", type=float, default=None, help="Maximum model size in billions of parameters (e.g. 7 for 7B). If provided, models larger than this will be excluded unless they provide local weights).")
     args = parser.parse_args()
     if args.name:
         models = search_by_name(args.name, fetch_limit=args.limit)

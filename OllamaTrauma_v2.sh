@@ -1753,8 +1753,9 @@ download_model_huggingface() {
     return 1
   fi
   
-  log_info "Searching Hugging Face..."
-  python3 "$HF_SEARCH_SCRIPT" --name "$query"
+  log_info "Searching Hugging Face (GGUF-only, <=7B preferred)..."
+  # Enforce safe defaults for local installs: require downloadable weights, prefer GGUF, max 7B
+  python3 "$HF_SEARCH_SCRIPT" --name "$query" --require-weights --gguf-only --max-b 7 --sort composite --limit 200 --top 20
   
   echo
   read -p "Enter model ID to download (e.g., 'TheBloke/Llama-2-7B-GGUF'): " -r model_id
