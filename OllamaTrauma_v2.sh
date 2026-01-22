@@ -100,11 +100,30 @@ install_nvidia_components() {
       log_info "nvidia-smi not found — attempting automated driver install for ${OS}"
       case "${OS,,}" in
         ubuntu|debian)
+          log_info "Adding NVIDIA apt repositories for drivers and container toolkit"
+          if [[ -f /etc/os-release ]]; then
+            distribution=$(source /etc/os-release && echo "${ID}${VERSION_ID}")
+          else
+            distribution="${OS}"
+          fi
+          sudo mkdir -p /etc/apt/keyrings || true
+          curl -fsSL https://nvidia.github.io/nvidia-docker/gpgkey | sudo gpg --dearmor -o /etc/apt/keyrings/nvidia-docker.gpg || true
+          curl -s -L https://nvidia.github.io/nvidia-docker/${distribution}/nvidia-docker.list \
+            | sed 's#deb https://#deb [signed-by=/etc/apt/keyrings/nvidia-docker.gpg] https://#g' \
+            | sudo tee /etc/apt/sources.list.d/nvidia-docker.list >/dev/null || true
+
           sudo apt-get update -y || true
           DEBIAN_FRONTEND=noninteractive sudo apt-get install -y ubuntu-drivers-common || true
           DEBIAN_FRONTEND=noninteractive sudo ubuntu-drivers autoinstall || true
           ;;
         fedora|centos|rhel)
+          log_info "Adding NVIDIA yum/dnf repositories for nvidia-container-toolkit"
+          if [[ -f /etc/os-release ]]; then
+            distribution=$(source /etc/os-release && echo "${ID}${VERSION_ID}")
+          else
+            distribution="${OS}"
+          fi
+          curl -s -L https://nvidia.github.io/nvidia-docker/${distribution}/nvidia-docker.repo | sudo tee /etc/yum.repos.d/nvidia-docker.repo >/dev/null || true
           if command -v dnf >/dev/null 2>&1; then
             sudo dnf -y install akmod-nvidia || true
           else
@@ -113,6 +132,9 @@ install_nvidia_components() {
           ;;
         arch)
           sudo pacman -Syu --noconfirm nvidia nvidia-utils || true
+          ;;
+        macos)
+          log_warn "macOS detected: NVIDIA driver install is not supported via this script. If you have an NVIDIA eGPU, install drivers manually."
           ;;
         *)
           log_warn "Automatic driver install is not supported for OS: ${OS}. Please install drivers manually."
@@ -131,7 +153,7 @@ install_nvidia_components() {
       log_info "Attempting automated install of nvidia-container-toolkit"
       case "${OS,,}" in
         ubuntu|debian)
-          sudo apt-get update -y || true
+          # apt repo should already be added above; ensure package installed
           DEBIAN_FRONTEND=noninteractive sudo apt-get install -y nvidia-container-toolkit || true
           if systemctl list-units --type=service --all | grep -q docker.service; then
             sudo systemctl restart docker || true
@@ -141,6 +163,7 @@ install_nvidia_components() {
           fi
           ;;
         fedora|centos|rhel)
+          # repo added above; install via dnf/yum
           if command -v dnf >/dev/null 2>&1; then
             sudo dnf -y install nvidia-container-toolkit || true
           else
@@ -155,6 +178,9 @@ install_nvidia_components() {
           ;;
         arch)
           sudo pacman -Syu --noconfirm nvidia-container-toolkit || true
+          ;;
+        macos)
+          log_warn "macOS detected: nvidia-container-toolkit is not available; skipping."
           ;;
         *)
           log_warn "Automatic nvidia-container-toolkit install not available for OS: ${OS}"
