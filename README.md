@@ -7,6 +7,93 @@
 
 ---
 
+##  Synopsis
+
+OllamaTrauma is a terminal-first assistant to set up local AI quickly, manage multiple runners and models, and keep your environment healthy. It guides first-time setup, supports batch operations, profiles, benchmarking, and a quick chat interface — all with sensible defaults.
+
+##  Options Synopsis
+
+Command-line shortcuts for common tasks:
+
+```bash
+# Health: show dashboard then exit
+bash OllamaTrauma_v2.sh --health
+
+# Direct model download by name
+bash OllamaTrauma_v2.sh --download llama2:7b
+
+# Batch models from file
+bash OllamaTrauma_v2.sh --batch config/models_batch.txt
+
+# Power-user switches (env or flags)
+DEBUG=1            # verbose logs
+SKIP_CHECKS=1      # skip dependency checks
+AUTO_YES=1         # non-interactive defaults
+```
+
+##  Automated Testing
+
+Non-interactive menu coverage is included to help CI:
+
+- Harness: see [OllamaTrauma_AI_Runner_and_LLM/test/test_runner.py](OllamaTrauma_AI_Runner_and_LLM/test/test_runner.py)
+- Install deps and run tests: `make test`
+- CI-friendly run (warnings allowed): `make test-ci`
+- Logs: [OllamaTrauma_AI_Runner_and_LLM/log](OllamaTrauma_AI_Runner_and_LLM/log)
+
+##  Try It
+
+Copy‑paste commands for common flows:
+
+```bash
+# 1) First run
+bash OllamaTrauma_v2.sh
+
+# 2) Health dashboard (non‑interactive)
+bash OllamaTrauma_v2.sh --health
+
+# 3) Download a popular model (non‑interactive)
+bash OllamaTrauma_v2.sh --download mistral
+
+# 4) Batch download from a list (non‑interactive)
+bash OllamaTrauma_v2.sh --batch config/models_batch.txt
+
+# 5) Quick chat via Ollama (after a model is pulled)
+ollama run mistral
+
+# 6) CI test harness (safe, non‑interactive)
+make deps && make test-ci
+```
+
+## Hugging Face Model Search CLI
+
+You can search Hugging Face models from the repository using the included interactive CLI.
+
+Interactive:
+
+```bash
+python3 scripts/hf_model_search.py
+```
+
+One-shot searches:
+
+```bash
+python3 scripts/hf_model_search.py --name "gpt"
+python3 scripts/hf_model_search.py --tag "text-generation"
+```
+
+The CLI returns the top 10 models by downloads for your query. Menus use `0` to go back or exit.
+
+Interactive menu paths (for reference once inside the app):
+
+```text
+# Initialize project:          Main Menu → 1 → 1
+# Install Ollama:              Main Menu → 2 → 1
+# Interactive model selector:  Main Menu → 3 → 1
+# Health dashboard:            Main Menu → 6
+# Chat interface:              Main Menu → 7
+# Save profile:                Main Menu → 8 → 1
+```
+
 ##  Table of Contents
 
 1. [Quick Start](#-quick-start)
@@ -1196,3 +1283,25 @@ curl -fsSL https://ollama.com/install.sh | sh
 
 MIT License - see LICENSE file for details
 
+
+## Environment-Based Token Setup
+- Purpose: Load Red Hat Automation Hub credentials from your home env file.
+- Location: ~/.ansible/conf/env.yml (never commit secrets to the repo).
+- Token key: rh_credentials_token
+- Usage: ansible.cfg templates do not embed tokens; collection installs read environment vars.
+- Install auth: exports `ANSIBLE_GALAXY_SERVER_PUBLISHED_TOKEN` and `ANSIBLE_GALAXY_SERVER_VALIDATED_TOKEN` from env.yml during `ansible-galaxy collection install`.
+- Example env.yml:
+
+```yaml
+rh_credentials_token: YOUR_TOKEN_HERE
+automation_hub_url: https://cloud.redhat.com/api/automation-hub/
+validated_url: https://console.redhat.com/api/automation-hub/
+community_galaxy_url: https://galaxy.ansible.com/
+```
+
+- To set/update: run the configure playbook; it will prompt and persist safely.
+
+```bash
+ansible-playbook -i localhost, -c local Ansible-Standards/ansible/playbooks/configure_projects.yml \
+  -e "root_path=$ROOT prune_configs=true"
+```

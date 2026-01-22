@@ -1673,8 +1673,13 @@ download_model_huggingface() {
   log_step "Download Model from Hugging Face"
   echo
   
-  if [[ ! -f "${PROJECT_ROOT}/scripts/hf_search.py" ]]; then
-    log_error "hf_search.py not found. Please run 'Initialize Project' first."
+  # prefer the new interactive CLI script; fall back to legacy hf_search.py if present
+  if [[ -f "${PROJECT_ROOT}/scripts/hf_model_search.py" ]]; then
+    HF_SEARCH_SCRIPT="${PROJECT_ROOT}/scripts/hf_model_search.py"
+  elif [[ -f "${PROJECT_ROOT}/scripts/hf_search.py" ]]; then
+    HF_SEARCH_SCRIPT="${PROJECT_ROOT}/scripts/hf_search.py"
+  else
+    log_error "Hugging Face search script not found. Please initialize or add scripts/hf_model_search.py"
     pause
     return 1
   fi
@@ -1687,7 +1692,7 @@ download_model_huggingface() {
   fi
   
   log_info "Searching Hugging Face..."
-  python3 "${PROJECT_ROOT}/scripts/hf_search.py" "$query"
+  python3 "$HF_SEARCH_SCRIPT" --name "$query"
   
   echo
   read -p "Enter model ID to download (e.g., 'TheBloke/Llama-2-7B-GGUF'): " -r model_id
@@ -1708,6 +1713,95 @@ download_model_huggingface() {
     log_error "huggingface-cli not found. Install with: pip install huggingface-hub"
   fi
   
+  pause
+}
+
+# ----------------------------------------------------------------------------
+# CODE ASSISTANTS (Ollama)
+# ----------------------------------------------------------------------------
+
+install_code_assistants_bundle() {
+  show_banner
+  log_step "Install Code Assistant Bundle (Ollama)"
+  echo
+
+  if ! command -v ollama &>/dev/null; then
+    log_error "Ollama is not installed. Install it first from AI Runners menu."
+    pause
+    return 1
+  fi
+
+  local code_models=(
+    "codellama:7b-instruct"
+    "codellama:7b-python"
+    "mistral:7b"
+  )
+
+  log_info "Pulling code-focused models with Ollama..."
+  for m in "${code_models[@]}"; do
+    log_info "Pulling $m"
+    ollama pull "$m" || log_warn "Failed to pull $m"
+    echo
+  done
+
+  log_success "Code assistant bundle installation complete."
+  echo
+  read -p "Run a code assistant now? [y/N]: " -r reply
+  if [[ "$reply" =~ ^[Yy]$ ]]; then
+    run_code_assistant
+    return
+  fi
+  pause
+}
+
+run_code_assistant() {
+  show_banner
+  log_step "Run Code Assistant (Ollama)"
+  echo
+
+  if ! command -v ollama &>/dev/null; then
+    log_error "Ollama is not installed. Install it first from AI Runners menu."
+    pause
+    return 1
+  fi
+
+  log_info "Discovering installed code assistant models..."
+  local candidates
+  candidates=$(ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -Ei 'code|codellama|mistral')
+  if [[ -z "$candidates" ]]; then
+    log_warn "No code assistant models found. Install the bundle first."
+    pause
+    return 1
+  fi
+
+  echo "Available code assistants:"
+  local idx=1
+  local arr=()
+  while IFS= read -r line; do
+    printf "  %d) %s\n" "$idx" "$line"
+    arr+=("$line")
+    idx=$((idx+1))
+  done <<< "$candidates"
+  echo "  0) Cancel"
+  echo
+  read -p "Select model [0-$((idx-1))]: " -r choice
+  if [[ "$choice" == "0" ]]; then
+    log_info "Cancelled"
+    pause
+    return 0
+  fi
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || [[ "$choice" -lt 1 ]] || [[ "$choice" -ge "$idx" ]]; then
+    log_error "Invalid selection"
+    pause
+    return 1
+  fi
+
+  local model="${arr[$((choice-1))]}"
+  echo
+  log_step "Starting code assistant: $model"
+  echo "Tip: Paste a coding task or function spec; type 'exit' to quit."
+  echo
+  ollama run "$model" || log_error "Failed to run $model"
   pause
 }
 
@@ -1742,6 +1836,22 @@ list_available_models() {
     ollama list || log_warn "Could not list Ollama models"
   fi
   
+  pause
+}
+
+
+run_hf_search_cli() {
+  show_banner
+  log_step "Hugging Face Model Search (CLI)"
+  echo
+
+  if [[ ! -f "${PROJECT_ROOT}/scripts/hf_model_search.py" ]]; then
+    log_error "scripts/hf_model_search.py not found. Please ensure the script exists."
+    pause
+    return 1
+  fi
+
+  python3 "${PROJECT_ROOT}/scripts/hf_model_search.py" || log_error "Hugging Face search CLI exited with error"
   pause
 }
 
@@ -2646,9 +2756,13 @@ models_menu() {
     echo "    10) Model Comparison Tool"
     echo "    11) Get Model Recommendations"
     echo
+    echo "  Code Assistants:"
+    echo "    12) Install Code Assistant Bundle (Ollama)"
+    echo "    13) Run Code Assistant (Ollama)"
+    echo
     echo "  0) Back to Main Menu"
     echo
-    read -p "Select option [0-11]: " -r choice
+    read -p "Select option [0-14]: " -r choice
 
     case "$choice" in
       1) run_menu_action interactive_model_selector ;;
@@ -2662,6 +2776,9 @@ models_menu() {
       9) run_menu_action benchmark_model ;;
       10) run_menu_action compare_models ;;
       11) run_menu_action recommend_models ;;
+      12) run_menu_action install_code_assistants_bundle ;;
+      13) run_menu_action run_code_assistant ;;
+      14) run_menu_action run_hf_search_cli ;;
       0) return 0 ;;
       *) log_error "Invalid option" && sleep 1 ;;
     esac
