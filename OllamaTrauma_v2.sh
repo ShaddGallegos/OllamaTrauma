@@ -672,42 +672,25 @@ EOF
 create_utility_scripts() {
   log_step "Creating utility scripts..."
   
-  # HF Search Script
+  # HF Search wrapper (calls the python/hf_model_search.py CLI)
   cat > "${PROJECT_ROOT}/scripts/hf_search.py" << 'EOFPY'
 #!/usr/bin/env python3
-"""Search Hugging Face models"""
+import os
 import sys
-import requests
-import argparse
+import subprocess
 
-def search_models(query, limit=15):
-    url = "https://huggingface.co/api/models"
-    params = {"search": query, "limit": limit}
-    
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        models = response.json()
-        
-        print(f"\nFound {len(models)} models:\n")
-        for i, model in enumerate(models, 1):
-            print(f"{i}. {model['id']}")
-            print(f"   Downloads: {model.get('downloads', 'N/A')}")
-            print(f"   Tags: {', '.join(model.get('tags', [])[:3])}\n")
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+HERE = os.path.dirname(os.path.abspath(__file__))
+TARGET = os.path.join(HERE, 'python', 'hf_model_search.py')
+if not os.path.exists(TARGET):
+    print(f"Missing helper: {TARGET}", file=sys.stderr)
+    sys.exit(1)
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("query", help="Search query")
-    parser.add_argument("--limit", type=int, default=15)
-    args = parser.parse_args()
-    search_models(args.query, args.limit)
+cmd = [sys.executable, TARGET] + sys.argv[1:]
+sys.exit(subprocess.call(cmd))
 EOFPY
-  
+
   chmod +x "${PROJECT_ROOT}/scripts/hf_search.py"
-  log_success "Created hf_search.py"
+  log_success "Created hf_search.py (wrapper to scripts/python/hf_model_search.py)"
   
   # URL Crawler Script
   cat > "${PROJECT_ROOT}/scripts/url_crawler.py" << 'EOFPY'

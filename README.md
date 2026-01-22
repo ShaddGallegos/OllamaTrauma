@@ -92,12 +92,12 @@ CLI flags (one-shot):
 Interactive menu paths (for reference once inside the app):
 
 ```text
-# Initialize project:          Main Menu → 1 → 1
-# Install Ollama:              Main Menu → 2 → 1
-# Interactive model selector:  Main Menu → 3 → 1
+# Initialize project:          Main Menu → 2 → 1
+# Install Ollama:              Main Menu → 3 → 1
+# Interactive model selector:  Main Menu → 4 → 1
 # Health dashboard:            Main Menu → 6
 # Chat interface:              Main Menu → 7
-# Save profile:                Main Menu → 8 → 1
+# Save profile:                Main Menu → 5 → Config Profiles
 ```
 
 ##  Table of Contents
@@ -124,7 +124,7 @@ Interactive menu paths (for reference once inside the app):
 bash OllamaTrauma_v2.sh
 
 # Step 2: Initialize (first time only)
-# Main Menu → 1 (Setup & Configuration) → 1 (Initialize Project)
+# Main Menu → 2 (Setup & Configuration) → 1 (Initialize Project)
 
 # Step 3: Install AI runner
 # Main Menu → 2 (AI Runners) → 1 (Install Ollama)
