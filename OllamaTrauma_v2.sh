@@ -855,16 +855,16 @@ install_system_dependencies() {
   local deps=()
   case "$PACKAGE_MANAGER" in
     dnf|yum)
-      deps=(git curl jq python3 python3-pip wget tar gzip make gcc gcc-c++)
+      deps=(git curl jq python3 python3-pip wget tar gzip make gcc gcc-c++ ShellCheck)
       sudo "$PACKAGE_MANAGER" install -y "${deps[@]}"
       ;;
     apt)
-      deps=(git curl jq python3 python3-pip wget tar gzip make gcc g++)
+      deps=(git curl jq python3 python3-pip wget tar gzip make gcc g++ shellcheck)
       sudo apt update
       sudo apt install -y "${deps[@]}"
       ;;
     brew)
-      deps=(git curl jq python3 wget)
+      deps=(git curl jq python3 wget shellcheck)
       brew install "${deps[@]}"
       ;;
     *)
@@ -964,7 +964,7 @@ check_dependencies() {
   echo
 
   local missing=0
-  local deps=(curl git python3 jq)
+  local deps=(curl git python3 jq shellcheck)
   
   # Add container runtime to check
   if [[ -n "$CONTAINER_CMD" ]]; then
@@ -1155,7 +1155,7 @@ install_llamacpp() {
   git clone https://github.com/ggerganov/llama.cpp.git "$LLAMACPP_DIR"
   
   log_info "Building llama.cpp..."
-  cd "$LLAMACPP_DIR"
+  cd "$LLAMACPP_DIR" || return
   make clean
   make -j$(nproc 2>/dev/null || echo 4)
   
@@ -1165,7 +1165,7 @@ install_llamacpp() {
     log_error "llama.cpp build failed"
   fi
   
-  cd "$PROJECT_ROOT"
+  cd "$PROJECT_ROOT" || return
   pause
 }
 
@@ -1211,7 +1211,7 @@ install_textgen_webui() {
   git clone https://github.com/oobabooga/text-generation-webui.git "$TEXTGEN_DIR"
   
   log_info "Installing dependencies..."
-  cd "$TEXTGEN_DIR"
+  cd "$TEXTGEN_DIR" || return
   
   if [[ -f "start_linux.sh" ]]; then
     chmod +x start_linux.sh
@@ -1247,6 +1247,53 @@ uninstall_textgen_webui() {
   log_success "text-generation-webui removed"
   pause
 }
+
+
+ollama_quickstart() {
+  show_banner
+  log_step "Ollama Quickstart: Install prerequisites, Ollama, and default coding LLM"
+  echo
+
+  # Check and install system/python deps
+  if ! check_all_dependencies; then
+    read -p "Install missing system and Python dependencies now? [y/N]: " -r reply
+    if [[ "$reply" =~ ^[Yy]$ ]]; then
+      install_system_dependencies || log_warn "System deps install failed"
+      install_python_packages || log_warn "Python deps install failed"
+    else
+      log_warn "Skipping dependency installation"
+    fi
+  fi
+
+  # Rootless podman setup if available function
+  if type setup_rootless_podman &>/dev/null; then
+    setup_rootless_podman || log_debug "rootless podman setup skipped/failed"
+  fi
+
+  # Install Ollama
+  install_ollama || log_error "Ollama installation may have failed"
+
+  # Pull a sensible default model for code assistance (ansible tasks)
+  local default_model="codellama:7b-instruct"
+  if command -v ollama &>/dev/null; then
+    log_info "Pulling default model: $default_model"
+    ollama pull "$default_model" || log_warn "Failed to pull $default_model"
+  else
+    log_error "Ollama not available; cannot pull model"
+    pause
+    return 1
+  fi
+
+  # Clear and start Ollama with the model so user can begin immediately
+  clear_screen
+  log_step "Starting Ollama with model: $default_model"
+  if command -v ollama &>/dev/null; then
+    ollama run "$default_model" || log_error "Failed to run $default_model"
+  else
+    log_error "Ollama not found after installation"
+  fi
+}
+
 
 start_runner() {
   show_banner
@@ -1312,7 +1359,7 @@ start_runner() {
         else
           log_error "start_linux.sh not found"
         fi
-        cd "$PROJECT_ROOT"
+        cd "$PROJECT_ROOT" || return
       fi
       ;;
     0)
@@ -1796,7 +1843,8 @@ run_code_assistant() {
     return 1
   fi
 
-  local model="${arr[$((choice-1))]}"
+  local model
+  model="${arr[$((choice-1))]}"
   echo
   log_step "Starting code assistant: $model"
   echo "Tip: Paste a coding task or function spec; type 'exit' to quit."
@@ -1863,8 +1911,10 @@ setup_batch_download_helper() {
   # Get system info
   log_info "Detecting your system..."
   echo
-  local total_ram=$(free -g | awk '/^Mem:/{print $2}')
-  local free_disk=$(df -BG . | awk 'NR==2{print $4}' | sed 's/G//')
+  local total_ram
+  total_ram=$(free -g | awk '/^Mem:/{print $2}')
+  local free_disk
+  free_disk=$(df -BG . | awk 'NR==2{print $4}' | sed 's/G//')
   echo "  Total RAM: ${total_ram}GB"
   echo "  Free Disk: ${free_disk}GB"
   echo
@@ -1973,7 +2023,8 @@ setup_batch_download_helper() {
     echo
     
     # Count models
-    local model_count=$(grep -v "^#" "${PROJECT_ROOT}/config/models_batch.txt" | grep -v "^$" | wc -l)
+    local model_count
+    model_count=$(grep -v "^#" "${PROJECT_ROOT}/config/models_batch.txt" | grep -v "^$" | wc -l)
     echo "Total models: $model_count"
     echo
     
@@ -2412,9 +2463,9 @@ crawl_training_data() {
   depth="${depth:-3}"
   
   log_info "Crawling $url with depth $depth..."
-  cd "${PROJECT_ROOT}/data/training"
+  cd "${PROJECT_ROOT}/data/training" || return
   python3 "${PROJECT_ROOT}/scripts/url_crawler.py" "$url" --depth "$depth"
-  cd "$PROJECT_ROOT"
+  cd "$PROJECT_ROOT" || return
   
   log_success "Crawling complete. Files saved to: ${PROJECT_ROOT}/data/training/"
   pause
@@ -2554,8 +2605,10 @@ backup_project_data() {
   log_step "Backup Project Data"
   echo
   
-  local backup_name="ollamatrauma_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
-  local backup_path="${BACKUP_DIR}/${backup_name}"
+  local backup_name
+  backup_name="ollamatrauma_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
+  local backup_path
+  backup_path="${BACKUP_DIR}/${backup_name}"
   
   mkdir -p "$BACKUP_DIR"
   
@@ -3156,29 +3209,25 @@ main_menu() {
     echo "Main Menu"
     echo "==========================================================="
     echo
-    echo "  1) Setup & Configuration"
-    echo "  2) AI Runners Management"
-    echo "  3) Model Management"
-    echo "  4) Training Data Crawler"
+    echo "  1) Ollama Quickstart (install & start default coding LLM)"
+    echo "  2) Setup & Configuration"
+    echo "  3) AI Runners"
+    echo "  4) Models"
     echo "  5) Maintenance & Logs"
-    echo "  6) Health Check Dashboard"
+    echo "  6) Health Dashboard"
     echo "  7) Chat Interface"
-    echo "  8) Configuration Profiles"
-    echo "  9) Quick Run (Auto-detect)"
     echo "  0) Exit"
     echo
     read -p "Select option [0-9]: " -r choice
 
     case "$choice" in
-      1) run_menu_action setup_menu ;;
-      2) run_menu_action ai_runners_menu ;;
-      3) run_menu_action models_menu ;;
-      4) run_menu_action crawl_training_data ;;
+      1) run_menu_action ollama_quickstart ;;
+      2) run_menu_action setup_menu ;;
+      3) run_menu_action ai_runners_menu ;;
+      4) run_menu_action models_menu ;;
       5) run_menu_action maintenance_menu ;;
       6) run_menu_action health_check_dashboard ;;
       7) run_menu_action chat_interface ;;
-      8) run_menu_action config_profiles_menu ;;
-      9) run_menu_action quick_run ;;
       0)
         clear_screen
         log_success "Thank you for using OllamaTrauma v2!"
@@ -3248,3 +3297,147 @@ main_menu
 
 # Release lock
 release_lock
+
+
+# >>> Merged functions from other scripts >>>
+
+# From: /run/media/sgallego/SD_Card/GIT/OllamaTrauma_AI_Runner_and_LLM/install.sh
+check_os_script() {
+  local os="$1"
+  local script_path=""
+  
+  # Check for OS-specific script
+  if [[ -f "${SCRIPT_DIR}/scripts/${os}/OllamaTrauma_v2.sh" ]]; then
+    script_path="${SCRIPT_DIR}/scripts/${os}/OllamaTrauma_v2.sh"
+  elif [[ -f "${SCRIPT_DIR}/scripts/${os}/OllamaTrauma_v2.ps1" ]]; then
+    script_path="${SCRIPT_DIR}/scripts/${os}/OllamaTrauma_v2.ps1"
+  # Fallback to generic Linux script if specific distro not found
+  elif [[ "$os" == "debian" ]] || [[ "$os" == "arch" ]] || [[ "$os" == "linux" ]]; then
+    if [[ -f "${SCRIPT_DIR}/scripts/linux/OllamaTrauma_v2.sh" ]]; then
+      script_path="${SCRIPT_DIR}/scripts/linux/OllamaTrauma_v2.sh"
+    fi
+  fi
+  
+  # Final fallback to current script if no OS-specific version
+  if [[ -z "$script_path" ]] && [[ -f "${SCRIPT_DIR}/OllamaTrauma_v2.sh" ]]; then
+    log_warn "No OS-specific script found, using universal version"
+    script_path="${SCRIPT_DIR}/OllamaTrauma_v2.sh"
+  fi
+  
+  echo "$script_path"
+}
+
+
+# From: /run/media/sgallego/SD_Card/GIT/OllamaTrauma_AI_Runner_and_LLM/install.sh
+setup_os_script() {
+  local os="$1"
+  local source_script="$2"
+  local target_script="${SCRIPT_DIR}/OllamaTrauma_v2.sh"
+  
+  log_step "Setting up OllamaTrauma for: $os"
+  echo
+  
+  # If source and target are the same, no need to copy
+  if [[ "$source_script" == "$target_script" ]]; then
+    log_info "Using existing universal script"
+    return 0
+  fi
+  
+  # Backup existing script if it exists
+  if [[ -f "$target_script" ]]; then
+    local backup_file
+    backup_file="${target_script}.backup.$(date +%Y%m%d-%H%M%S)"
+    log_info "Backing up existing script to: $(basename "$backup_file")"
+    cp "$target_script" "$backup_file"
+  fi
+  
+  # Copy OS-specific script to main location
+  log_info "Copying OS-specific script..."
+  cp "$source_script" "$target_script"
+  chmod +x "$target_script"
+  
+  log_success "Script setup complete"
+}
+
+
+# From: /run/media/sgallego/SD_Card/GIT/OllamaTrauma_AI_Runner_and_LLM/install.sh
+run_initial_setup() {
+  local script="${SCRIPT_DIR}/OllamaTrauma_v2.sh"
+  
+  log_step "Running initial project setup..."
+  echo
+  
+  if [[ ! -f "$script" ]]; then
+    log_error "Main script not found: $script"
+    return 1
+  fi
+  
+  # Run the script's initialization
+  log_info "Launching OllamaTrauma..."
+  echo
+  sleep 1
+  
+  # Execute the script
+  exec "$script"
+}
+
+
+# From: /run/media/sgallego/SD_Card/GIT/OllamaTrauma_AI_Runner_and_LLM/install.sh
+main() {
+  show_banner
+  
+  log_step "Starting OllamaTrauma installation..."
+  echo
+  
+  # Detect operating system
+  log_info "Detecting operating system..."
+  local detected_os
+  detected_os=$(detect_os)
+  
+  if [[ -z "$detected_os" ]]; then
+    log_error "Could not detect operating system"
+    exit 1
+  fi
+  
+  log_success "Detected OS: $detected_os"
+  echo
+  
+  # Check for OS-specific script
+  log_info "Looking for OS-specific script..."
+  local os_script
+  os_script=$(check_os_script "$detected_os")
+  
+  if [[ -z "$os_script" ]]; then
+    log_error "No compatible script found for: $detected_os"
+    log_info "Please check scripts/ directory for available OS versions"
+    exit 1
+  fi
+  
+  log_success "Found script: $(basename $(dirname $os_script))/$(basename $os_script)"
+  echo
+  
+  # Setup the OS-specific script
+  setup_os_script "$detected_os" "$os_script"
+  echo
+  
+  # Run initial setup
+  log_success "Installation preparation complete!"
+  echo
+  log_info "Starting OllamaTrauma..."
+  echo
+  sleep 1
+  
+  run_initial_setup
+}
+
+
+# From: /run/media/sgallego/SD_Card/GIT/OllamaTrauma_AI_Runner_and_LLM/scripts/cleanup_project.sh
+move_if_exists() {
+  local path="$1"
+  if [[ -e "${ROOT_DIR}/${path}" ]]; then
+    echo "Moving ${path} -> ${BACKUP_DIR}/${path}"
+    mkdir -p "${BACKUP_DIR}/$(dirname "${path}")"
+    mv "${ROOT_DIR}/${path}" "${BACKUP_DIR}/${path}"
+  fi
+}
+
