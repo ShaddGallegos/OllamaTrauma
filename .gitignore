@@ -50,6 +50,14 @@ vault.yml
 vault.yaml
 # Backup files
 *.bak
+*.bak.*
+*.backup
+*.backup.*
+.backup/
+.backups/
+.trunk/
+archive/
+*_backups*
 
 # Project test logs
 log/

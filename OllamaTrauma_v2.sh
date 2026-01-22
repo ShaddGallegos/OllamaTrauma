@@ -2759,6 +2759,7 @@ models_menu() {
     echo "  Code Assistants:"
     echo "    12) Install Code Assistant Bundle (Ollama)"
     echo "    13) Run Code Assistant (Ollama)"
+    echo "    14) Search Hugging Face (interactive CLI)"
     echo
     echo "  0) Back to Main Menu"
     echo
