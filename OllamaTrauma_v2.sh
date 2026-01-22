@@ -84,100 +84,27 @@ log_step() {
   echo -e "${BLUE}[STEP]${NC} $*" | tee -a "$LOG_FILE"
 }
 
-log_success() {
-  echo -e "${GREEN}[OK]${NC} $*" | tee -a "$LOG_FILE"
-}
-
-log_debug() {
-  if [[ "${DEBUG:-0}" == "1" ]]; then
-    echo -e "${CYAN}[DEBUG]${NC} $*" | tee -a "$LOG_FILE"
-  fi
-}
-
-# ============================================================================
-# DEBUG MODE FUNCTIONS
-# ============================================================================
-
-_debug_log_tmp="${LOG_DIR}/debug_$(date +%Y%m%d_%H%M%S).log"
-readonly DEBUG_LOG="${_debug_log_tmp}"
-_debug_report_tmp="${LOG_DIR}/debug_report_$(date +%Y%m%d_%H%M%S).txt"
-readonly DEBUG_REPORT="${_debug_report_tmp}"
-
-debug_test_function() {
-  local func_name="$1"
-  local description="$2"
-  
-  echo "===========================================================" | tee -a "$DEBUG_LOG"
-  echo "Testing: $func_name - $description" | tee -a "$DEBUG_LOG"
-  echo "Time: $(date)" | tee -a "$DEBUG_LOG"
-  echo "───────────────────────────────────────────────────────────" | tee -a "$DEBUG_LOG"
-  
-  if type "$func_name" &>/dev/null; then
-    echo "[PASS] Function exists: $func_name" | tee -a "$DEBUG_LOG"
-    
-    # Try to get function definition
-    if declare -f "$func_name" &>/dev/null; then
-      echo "[PASS] Function is properly defined" | tee -a "$DEBUG_LOG"
-    else
-      echo "[FAIL] Function exists but is not properly defined" | tee -a "$DEBUG_LOG" "$DEBUG_REPORT"
-      return 1
-    fi
-  else
-    echo "[FAIL] Function missing: $func_name" | tee -a "$DEBUG_LOG" "$DEBUG_REPORT"
-    return 1
-  fi
-  
-  echo "" | tee -a "$DEBUG_LOG"
-  return 0
-}
-
-# ============================================================================
-# GPU detection and run-once build (llama.cpp integration)
-# ============================================================================
-detect_gpus() {
-  GPU_AVAILABLE=0
-  GPU_VENDOR=""
-  if command -v nvidia-smi >/dev/null 2>&1; then
-    GPU_AVAILABLE=1
-    GPU_VENDOR="nvidia"
-    GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || true)
-    log_info "NVIDIA GPU detected: ${GPU_INFO}"
-  elif command -v rocm-smi >/dev/null 2>&1; then
-    GPU_AVAILABLE=1
-    GPU_VENDOR="amd"
-    log_info "AMD ROCm GPU detected"
-  else
-    log_debug "No supported GPU vendor detected (nvidia-smi/rocm-smi missing)"
-  fi
-}
-
-# Attempt to install/configure NVIDIA runtime components when an NVIDIA GPU is present.
-# This is conservative: drivers are OS-specific and may require a reboot, so we only
-# attempt to install the container toolkit and provide guidance for driver install.
 install_nvidia_components() {
   log_step "Ensuring NVIDIA container/driver components"
 
-  # Ensure we know the OS/package manager
+  AUTO_INSTALL_NVIDIA=${AUTO_INSTALL_NVIDIA:-1}
   detect_os || true
 
+  # Try to ensure drivers are present (non-interactive by default)
   if command -v nvidia-smi >/dev/null 2>&1; then
     log_info "NVIDIA drivers already present (nvidia-smi available)"
   else
-    log_warn "nvidia-smi not found — NVIDIA driver not detected. Driver install is interactive and may require reboot."
-    echo
-    read -r -p "Attempt to install NVIDIA drivers and CUDA (may require sudo/reboot)? [y/N]: " _ans
-    if [[ "${_ans,,}" != "y" ]]; then
-      log_info "Skipping automatic NVIDIA driver install. Please install drivers manually and re-run."
+    if [[ "${AUTO_INSTALL_NVIDIA}" -ne 1 ]]; then
+      log_warn "nvidia-smi not found — NVIDIA driver not detected. Skipping automatic install (AUTO_INSTALL_NVIDIA=0)."
     else
+      log_info "nvidia-smi not found — attempting automated driver install for ${OS}"
       case "${OS,,}" in
         ubuntu|debian)
-          log_info "Running apt-based NVIDIA helper (ubuntu/debian)"
-          sudo apt update || true
-          sudo apt install -y ubuntu-drivers-common || true
-          sudo ubuntu-drivers autoinstall || true
+          sudo apt-get update -y || true
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y ubuntu-drivers-common || true
+          DEBIAN_FRONTEND=noninteractive sudo ubuntu-drivers autoinstall || true
           ;;
         fedora|centos|rhel)
-          log_info "Running dnf/yum-based NVIDIA helper (fedora/rhel/centos)"
           if command -v dnf >/dev/null 2>&1; then
             sudo dnf -y install akmod-nvidia || true
           else
@@ -185,42 +112,56 @@ install_nvidia_components() {
           fi
           ;;
         arch)
-          log_info "Arch/Manjaro detected — installing via pacman"
           sudo pacman -Syu --noconfirm nvidia nvidia-utils || true
           ;;
         *)
-          log_warn "Automatic driver install is not supported for OS: ${OS}. Please follow vendor instructions."
+          log_warn "Automatic driver install is not supported for OS: ${OS}. Please install drivers manually."
           ;;
       esac
     fi
   fi
 
-  # Install/configure nvidia-container-toolkit (Docker/Podman support)
+  # Tooling install (nvidia-container-toolkit)
   if command -v nvidia-container-cli >/dev/null 2>&1 || command -v nvidia-container-runtime >/dev/null 2>&1; then
     log_info "nvidia container runtime/tooling already present"
   else
-    log_info "Attempting to install nvidia-container-toolkit for container runtimes"
-    case "${OS,,}" in
-      ubuntu|debian)
-        sudo apt update || true
-        sudo apt install -y nvidia-container-toolkit || true
-        sudo systemctl restart docker || true
-        ;;
-      fedora|centos|rhel)
-        if command -v dnf >/dev/null 2>&1; then
-          sudo dnf install -y nvidia-container-toolkit || true
-        else
-          sudo yum install -y nvidia-container-toolkit || true
-        fi
-        ;;
-      arch)
-        sudo pacman -Syu --noconfirm nvidia-container-toolkit || true
-        ;;
-      *)
-        log_warn "Automatic nvidia-container-toolkit install not available for OS: ${OS}"
-        ;;
-    esac
-    log_info "If you are using Podman, ensure the OCI hooks are configured per the toolkit docs."
+    if [[ "${AUTO_INSTALL_NVIDIA}" -ne 1 ]]; then
+      log_warn "Skipping automatic nvidia-container-toolkit install (AUTO_INSTALL_NVIDIA=0)."
+    else
+      log_info "Attempting automated install of nvidia-container-toolkit"
+      case "${OS,,}" in
+        ubuntu|debian)
+          sudo apt-get update -y || true
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y nvidia-container-toolkit || true
+          if systemctl list-units --type=service --all | grep -q docker.service; then
+            sudo systemctl restart docker || true
+          fi
+          if systemctl list-units --type=service --all | grep -q podman.service; then
+            sudo systemctl restart podman || true
+          fi
+          ;;
+        fedora|centos|rhel)
+          if command -v dnf >/dev/null 2>&1; then
+            sudo dnf -y install nvidia-container-toolkit || true
+          else
+            sudo yum -y install nvidia-container-toolkit || true
+          fi
+          if systemctl list-units --type=service --all | grep -q docker.service; then
+            sudo systemctl restart docker || true
+          fi
+          if systemctl list-units --type=service --all | grep -q podman.service; then
+            sudo systemctl restart podman || true
+          fi
+          ;;
+        arch)
+          sudo pacman -Syu --noconfirm nvidia-container-toolkit || true
+          ;;
+        *)
+          log_warn "Automatic nvidia-container-toolkit install not available for OS: ${OS}"
+          ;;
+      esac
+      log_info "If you are using Podman, ensure the OCI hooks are configured per the toolkit docs."
+    fi
   fi
 
   # Final check
@@ -230,6 +171,8 @@ install_nvidia_components() {
     log_warn "nvidia-smi still not available — you may need to reboot or complete driver install manually."
   fi
 }
+
+
 
 gpu_runonce_setup() {
   # Ensure data directories exist
