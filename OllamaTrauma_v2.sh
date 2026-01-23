@@ -86,16 +86,45 @@ log_step() {
 
 # JVM workaround: disable Perf shared memory to avoid SIGBUS crashes in some JDK builds
 # Toggle with environment variable: ENABLE_JVM_PERF_WORKAROUND=0 to disable
-# This prepends the flag to `JAVA_TOOL_OPTIONS` and `_JAVA_OPTIONS` if not present.
+# The script will probe the local `java` to find which Perf flag name it accepts
+# (some builds use PerfDisableSharedMemory, others PerfDisableSharedMem).
 ENABLE_JVM_PERF_WORKAROUND=${ENABLE_JVM_PERF_WORKAROUND:-1}
-if [[ "${ENABLE_JVM_PERF_WORKAROUND}" -eq 1 ]]; then
-  if [[ -z "${JAVA_TOOL_OPTIONS:-}" || "${JAVA_TOOL_OPTIONS}" != *"PerfDisableSharedMemory"* ]]; then
-    export JAVA_TOOL_OPTIONS="-XX:+PerfDisableSharedMemory ${JAVA_TOOL_OPTIONS:-}"
+JAVA_PERF_FLAG=""
+
+choose_java_perf_flag() {
+  # candidates in order of preference
+  local candidates=("PerfDisableSharedMemory" "PerfDisableSharedMem")
+  if [[ "${ENABLE_JVM_PERF_WORKAROUND}" -ne 1 ]]; then
+    return 0
   fi
-  if [[ -z "${_JAVA_OPTIONS:-}" || "${_JAVA_OPTIONS}" != *"PerfDisableSharedMemory"* ]]; then
-    export _JAVA_OPTIONS="-XX:+PerfDisableSharedMemory ${_JAVA_OPTIONS:-}"
+  if ! command -v java >/dev/null 2>&1; then
+    log_warn "java not found; skipping JVM perf flag probe"
+    return 0
   fi
-fi
+
+  for f in "${candidates[@]}"; do
+    # Probe java to see if it accepts the flag. Use -version to keep it non-invasive.
+    if java -XX:+${f} -version >/dev/null 2>&1; then
+      JAVA_PERF_FLAG="-XX:+${f}"
+      log_info "Detected JVM accepts flag: ${JAVA_PERF_FLAG}"
+      break
+    fi
+  done
+
+  if [[ -n "${JAVA_PERF_FLAG}" ]]; then
+    if [[ -z "${JAVA_TOOL_OPTIONS:-}" || "${JAVA_TOOL_OPTIONS}" != *"${JAVA_PERF_FLAG#-}"* ]]; then
+      export JAVA_TOOL_OPTIONS="${JAVA_PERF_FLAG} ${JAVA_TOOL_OPTIONS:-}"
+    fi
+    if [[ -z "${_JAVA_OPTIONS:-}" || "${_JAVA_OPTIONS}" != *"${JAVA_PERF_FLAG#-}"* ]]; then
+      export _JAVA_OPTIONS="${JAVA_PERF_FLAG} ${_JAVA_OPTIONS:-}"
+    fi
+  else
+    log_warn "No known JVM Perf flag accepted by this java binary; leaving JAVA_TOOL_OPTIONS unchanged"
+  fi
+}
+
+# Run probe at source time
+choose_java_perf_flag || true
 
 install_nvidia_components() {
   log_step "Ensuring NVIDIA container/driver components"
