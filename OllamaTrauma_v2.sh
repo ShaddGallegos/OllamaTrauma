@@ -84,6 +84,19 @@ log_step() {
   echo -e "${BLUE}[STEP]${NC} $*" | tee -a "$LOG_FILE"
 }
 
+# JVM workaround: disable Perf shared memory to avoid SIGBUS crashes in some JDK builds
+# Toggle with environment variable: ENABLE_JVM_PERF_WORKAROUND=0 to disable
+# This prepends the flag to `JAVA_TOOL_OPTIONS` and `_JAVA_OPTIONS` if not present.
+ENABLE_JVM_PERF_WORKAROUND=${ENABLE_JVM_PERF_WORKAROUND:-1}
+if [[ "${ENABLE_JVM_PERF_WORKAROUND}" -eq 1 ]]; then
+  if [[ -z "${JAVA_TOOL_OPTIONS:-}" || "${JAVA_TOOL_OPTIONS}" != *"PerfDisableSharedMemory"* ]]; then
+    export JAVA_TOOL_OPTIONS="-XX:+PerfDisableSharedMemory ${JAVA_TOOL_OPTIONS:-}"
+  fi
+  if [[ -z "${_JAVA_OPTIONS:-}" || "${_JAVA_OPTIONS}" != *"PerfDisableSharedMemory"* ]]; then
+    export _JAVA_OPTIONS="-XX:+PerfDisableSharedMemory ${_JAVA_OPTIONS:-}"
+  fi
+fi
+
 install_nvidia_components() {
   log_step "Ensuring NVIDIA container/driver components"
 
@@ -112,6 +125,12 @@ install_nvidia_components() {
             | sed 's#deb https://#deb [signed-by=/etc/apt/keyrings/nvidia-docker.gpg] https://#g' \
             | sudo tee /etc/apt/sources.list.d/nvidia-docker.list >/dev/null || true
 
+          # Attempt to add CUDA repo as well (best-effort)
+          curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/${distribution}/x86_64/7fa2af80.pub \
+            | sudo gpg --dearmor -o /etc/apt/keyrings/nvidia-cuda.gpg || true
+          echo "deb [signed-by=/etc/apt/keyrings/nvidia-cuda.gpg] https://developer.download.nvidia.com/compute/cuda/repos/${distribution}/x86_64/ /" \
+            | sudo tee /etc/apt/sources.list.d/nvidia-cuda.list >/dev/null || true
+
           sudo apt-get update -y || true
           DEBIAN_FRONTEND=noninteractive sudo apt-get install -y ubuntu-drivers-common || true
           DEBIAN_FRONTEND=noninteractive sudo ubuntu-drivers autoinstall || true
@@ -123,7 +142,10 @@ install_nvidia_components() {
           else
             distribution="${OS}"
           fi
+          # Add nvidia-docker repo
           curl -s -L https://nvidia.github.io/nvidia-docker/${distribution}/nvidia-docker.repo | sudo tee /etc/yum.repos.d/nvidia-docker.repo >/dev/null || true
+          # Add CUDA repo (best-effort)
+          curl -s -L https://developer.download.nvidia.com/compute/cuda/repos/${distribution}/x86_64/cuda.repo | sudo tee /etc/yum.repos.d/cuda.repo >/dev/null || true
           if command -v dnf >/dev/null 2>&1; then
             sudo dnf -y install akmod-nvidia || true
           else
@@ -131,7 +153,16 @@ install_nvidia_components() {
           fi
           ;;
         arch)
+          # Arch: install official packages where possible; prefer AUR helpers for toolkit
           sudo pacman -Syu --noconfirm nvidia nvidia-utils || true
+          if command -v paru >/dev/null 2>&1; then
+            paru -S --noconfirm nvidia-container-toolkit || true
+          elif command -v yay >/dev/null 2>&1; then
+            yay -S --noconfirm nvidia-container-toolkit || true
+          else
+            # Try pacman package first, otherwise user may need an AUR helper
+            sudo pacman -S --noconfirm nvidia-container-toolkit || true || log_warn "nvidia-container-toolkit may require an AUR helper (paru/yay) on Arch"
+          fi
           ;;
         macos)
           log_warn "macOS detected: NVIDIA driver install is not supported via this script. If you have an NVIDIA eGPU, install drivers manually."
@@ -197,6 +228,101 @@ install_nvidia_components() {
     log_warn "nvidia-smi still not available — you may need to reboot or complete driver install manually."
   fi
 }
+
+# ---------------------------------------------------------------------------
+# Spark (Apache Spark / NVIDIA RAPIDS) support for JVM workaround
+# If `ENABLE_JVM_PERF_WORKAROUND_SPARK=1`, the script will detect Spark
+# installations. To automatically apply the workaround to Spark configs,
+# set `AUTO_APPLY_SPARK=1` (defaults to 0 for safety).
+# ---------------------------------------------------------------------------
+ENABLE_JVM_PERF_WORKAROUND_SPARK=${ENABLE_JVM_PERF_WORKAROUND_SPARK:-1}
+AUTO_APPLY_SPARK=${AUTO_APPLY_SPARK:-0}
+
+detect_and_apply_spark_workaround() {
+  if [[ "${ENABLE_JVM_PERF_WORKAROUND_SPARK}" -ne 1 ]]; then
+    return 0
+  fi
+
+  SPARK_CONF_DIR=""
+  SPARK_DETECTED=0
+
+  if [[ -n "${SPARK_HOME:-}" && -d "${SPARK_HOME}/conf" ]]; then
+    SPARK_CONF_DIR="${SPARK_HOME}/conf"
+    SPARK_DETECTED=1
+  elif command -v spark-submit >/dev/null 2>&1; then
+    # Try to infer SPARK_HOME from spark-submit location
+    _spark_bin=$(readlink -f "$(command -v spark-submit)" 2>/dev/null || true)
+    if [[ -n "${_spark_bin}" ]]; then
+      SPARK_HOME=$(dirname "$(dirname "${_spark_bin}")")
+      if [[ -d "${SPARK_HOME}/conf" ]]; then
+        SPARK_CONF_DIR="${SPARK_HOME}/conf"
+        SPARK_DETECTED=1
+      fi
+    fi
+  fi
+
+  if [[ "${SPARK_DETECTED}" -ne 1 ]]; then
+    log_info "Spark not detected on this host; skipping Spark JVM workaround setup"
+    return 0
+  fi
+
+  log_info "Detected Spark config directory: ${SPARK_CONF_DIR}"
+
+  # Report what we'd do; only modify files when AUTO_APPLY_SPARK=1
+  if [[ "${AUTO_APPLY_SPARK}" -ne 1 ]]; then
+    log_info "To apply the JVM Perf workaround for Spark, set AUTO_APPLY_SPARK=1 and re-source this script."
+    log_info "Alternatively, add '-XX:+PerfDisableSharedMemory' to spark.driver.extraJavaOptions and spark.executor.extraJavaOptions"
+    return 0
+  fi
+
+  # Ensure spark-env.sh exists and add an idempotent export for JAVA_TOOL_OPTIONS
+  SPARK_ENV_FILE="${SPARK_CONF_DIR}/spark-env.sh"
+  if [[ ! -f "${SPARK_ENV_FILE}" ]]; then
+    echo "#!/usr/bin/env bash" | sudo tee "${SPARK_ENV_FILE}" >/dev/null || true
+    sudo chmod a+rx "${SPARK_ENV_FILE}" || true
+  fi
+
+  if ! sudo grep -q "PerfDisableSharedMemory" "${SPARK_ENV_FILE}" 2>/dev/null; then
+    sudo bash -c "cat >> '${SPARK_ENV_FILE}' <<'SPARKWORK'
+# Added by OllamaTrauma: avoid SIGBUS in some JDK builds
+if [[ -z \"\${JAVA_TOOL_OPTIONS:-}\" || \"\${JAVA_TOOL_OPTIONS}\" != *\"PerfDisableSharedMemory\"* ]]; then
+  export JAVA_TOOL_OPTIONS=\"-XX:+PerfDisableSharedMemory \${JAVA_TOOL_OPTIONS:-}\"
+fi
+SPARKWORK"
+    log_info "Updated ${SPARK_ENV_FILE} to export JAVA_TOOL_OPTIONS"
+  else
+    log_info "${SPARK_ENV_FILE} already contains PerfDisableSharedMemory; skipping"
+  fi
+
+  # Update spark-defaults.conf for driver/executor extra Java options (idempotent)
+  SPARK_DEFAULTS="${SPARK_CONF_DIR}/spark-defaults.conf"
+  touch "${SPARK_DEFAULTS}" || true
+  # Helper to append or update a property
+  append_or_update_prop() {
+    local key="$1"; shift
+    local val="$*"
+    if grep -q "^${key}\s\+" "${SPARK_DEFAULTS}" 2>/dev/null; then
+      # property exists; ensure our flag is present
+      if grep -q "^${key}.*PerfDisableSharedMemory" "${SPARK_DEFAULTS}" 2>/dev/null; then
+        log_info "${key} already contains PerfDisableSharedMemory"
+      else
+        sudo sed -i "s|^${key}.*|${key} ${val} -XX:+PerfDisableSharedMemory|" "${SPARK_DEFAULTS}" || true
+        log_info "Appended PerfDisableSharedMemory to ${key} in ${SPARK_DEFAULTS}"
+      fi
+    else
+      echo "${key} ${val} -XX:+PerfDisableSharedMemory" | sudo tee -a "${SPARK_DEFAULTS}" >/dev/null || true
+      log_info "Added ${key} to ${SPARK_DEFAULTS}"
+    fi
+  }
+
+  append_or_update_prop "spark.driver.extraJavaOptions" "-Dfile.encoding=UTF-8"
+  append_or_update_prop "spark.executor.extraJavaOptions" "-Dfile.encoding=UTF-8"
+
+  log_info "Spark JVM workaround applied to configs in ${SPARK_CONF_DIR}"
+}
+
+# Run detection/apply at script source time (non-destructive unless AUTO_APPLY_SPARK=1)
+detect_and_apply_spark_workaround || true
 
 
 
