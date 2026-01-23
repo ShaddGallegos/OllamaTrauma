@@ -478,6 +478,26 @@ Step 3: Start Batch Download
 
 Step 4: Monitor (optional)
 → Run: ./monitor_download.sh
+
+---
+
+## Pending / Paused Work
+
+The following follow-ups were started and deliberately paused (saved here so you can resume later):
+
+- JVM / Spark SIGBUS mitigation
+  - Implemented: script exports JVM Perf flag when possible and can detect Spark.
+  - Pending: full validation across JDK variants and optional auto-apply for Spark configs.
+  - Flags: `ENABLE_JVM_PERF_WORKAROUND` (default 1), `ENABLE_JVM_PERF_WORKAROUND_SPARK` (default 1),
+    `AUTO_APPLY_SPARK` (default 0).
+  - To resume: set `AUTO_APPLY_SPARK=1` and re-source `OllamaTrauma_v2.sh` to apply changes to Spark.
+
+- NVIDIA run-once installer hardening
+  - Implemented: `install_nvidia_components()` with best-effort repo adds for apt/dnf/pacman, container-toolkit installs.
+  - Pending: further distro mapping edge-cases, optional Arch AUR helper install refinements.
+
+If you'd like to resume any of the above, set the corresponding env flags (see `OllamaTrauma_v2.sh` top config) and re-source the script, or tell me which item to pick up next.
+
   • Watch progress in real-time
   • See completed models
   • Updates every 10 seconds
