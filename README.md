@@ -170,9 +170,11 @@ bash OllamaTrauma_v2.sh
 
 ### Multi-Backend Support
 - **Ollama** - Fastest, easiest (recommended)
-- **LocalAI** - Self-hosted alternative
 - **llama.cpp** - Direct model execution
 - **text-generation-webui** - Full-featured UI
+ - **Ollama** - Fastest, easiest (recommended)
+ - **llama.cpp** - Direct model execution
+ - **text-generation-webui** - Full-featured UI
 
 ### Intelligent System
 -  Auto-detects system resources (RAM, disk, CPU)
@@ -305,10 +307,9 @@ OllamaTrauma v2.1.0 - Main Menu
    └── 6) System Requirements Check
 
 2) AI Runners Management
-   ├── 1) Install Ollama (Recommended)
-   ├── 2) Install LocalAI
-   ├── 3) Install llama.cpp
-   ├── 4) Install text-generation-webui
+  ├── 1) Install Ollama (Recommended)
+  ├── 2) Install llama.cpp
+  ├── 3) Install text-generation-webui
    ├── 5) Start AI Runner
    ├── 6) Stop AI Runner
    ├── 7) Restart AI Runner
@@ -895,8 +896,8 @@ Run multiple AI backends simultaneously:
 → Menu: 2 → 1 (Install Ollama)
 → Menu: 2 → 5 (Start)
 
-# Terminal 2: LocalAI (port 8080)
-→ Menu: 2 → 2 (Install LocalAI)
+# Terminal 2: text-generation-webui (container)
+→ Menu: 2 → 3 (Install text-generation-webui)
 → Menu: 2 → 5 (Start)
 
 # Check both running
@@ -1265,7 +1266,7 @@ After bootstrap, the main menu will offer options for:
 1. **Quick Run** - Auto-detect installed runners and models
 2. **Check Dependencies** - Verify system requirements
 3. **System Requirements & Fix** - Comprehensive check with auto-repair
-4. **Install/Update AI Runners** - Install Ollama, LocalAI, llama.cpp, etc.
+4. **Install/Update AI Runners** - Install Ollama, llama.cpp, text-generation-webui, etc.
 5. **Run a Model (Advanced)** - Manual backend selection
 6. **Import from Hugging Face** - Search and download GGUF models by keywords
 7. **URL Training Crawler** - Collect training data from websites
@@ -1279,7 +1280,7 @@ After bootstrap, the main menu will offer options for:
 
 ### Optional
 - `jq` - JSON processing (recommended)
-- `docker` - For LocalAI and text-generation-webui
+- `docker` - For text-generation-webui and other containerized runners
 - `ollama` - For Ollama backend
 - `python3` - For HF search and URL crawler
   - `requests` - HTTP library
@@ -1340,7 +1341,7 @@ MIT License - see LICENSE file for details
 - Example env.yml:
 
 ```yaml
-rh_credentials_token: YOUR_TOKEN_HERE
+rh_credentials_token: "{{ rh_credentials_token }}"
 automation_hub_url: https://cloud.redhat.com/api/automation-hub/
 validated_url: https://console.redhat.com/api/automation-hub/
 community_galaxy_url: https://galaxy.ansible.com/

@@ -4,41 +4,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck disable=SC2093
 exec "$ROOT_DIR/OllamaTrauma_v2.sh" "$@"
-# ============================================================================
-# DEBUG MODE FUNCTIONS
-# ============================================================================
-
-readonly DEBUG_LOG="${LOG_DIR}/debug_$(date +%Y%m%d_%H%M%S).log"
-readonly DEBUG_REPORT="${LOG_DIR}/debug_report_$(date +%Y%m%d_%H%M%S).txt"
-
-debug_test_function() {
-  local func_name="$1"
-  local description="$2"
-  
-  echo "===========================================================" | tee -a "$DEBUG_LOG"
-  echo "Testing: $func_name - $description" | tee -a "$DEBUG_LOG"
-  echo "Time: $(date)" | tee -a "$DEBUG_LOG"
-  echo "───────────────────────────────────────────────────────────" | tee -a "$DEBUG_LOG"
-  
-  if type "$func_name" &>/dev/null; then
-    echo "[PASS] Function exists: $func_name" | tee -a "$DEBUG_LOG"
-    
-    # Try to get function definition
-    if declare -f "$func_name" &>/dev/null; then
-      echo "[PASS] Function is properly defined" | tee -a "$DEBUG_LOG"
-    else
-      echo "[FAIL] Function exists but is not properly defined" | tee -a "$DEBUG_LOG" "$DEBUG_REPORT"
-      return 1
-    fi
-  else
-    echo "[FAIL] Function missing: $func_name" | tee -a "$DEBUG_LOG" "$DEBUG_REPORT"
-    return 1
-  fi
-  
-  echo "" | tee -a "$DEBUG_LOG"
-  return 0
-}
 
 debug_mode() {
   clear_screen
@@ -113,8 +80,6 @@ debug_mode() {
   local runner_funcs=(
     "install_ollama:Ollama installer"
     "uninstall_ollama:Ollama uninstaller"
-    "install_localai:LocalAI installer"
-    "uninstall_localai:LocalAI uninstaller"
     "install_llamacpp:llama.cpp installer"
     "uninstall_llamacpp:llama.cpp uninstaller"
     "install_textgen_webui:text-generation-webui installer"
@@ -463,6 +428,7 @@ trap 'log_error "Terminated"; exit 143' TERM
 
 detect_os() {
   if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
     . /etc/os-release
     OS="${ID}"
     OS_VERSION="${VERSION_ID:-unknown}"
@@ -986,54 +952,7 @@ uninstall_ollama() {
   pause
 }
 
-install_localai() {
-  show_banner
-  log_step "Installing LocalAI..."
-  echo
-  
-  if [[ -z "$CONTAINER_CMD" ]]; then
-    log_error "No container runtime detected. Please install Docker or Podman first."
-    pause
-    return 1
-  fi
-  
-  # Check system resources before installation
-  if ! show_resource_warning "LocalAI installation"; then
-    return 1
-  fi
-  
-  log_info "Pulling LocalAI container image..."
-  $CONTAINER_CMD pull quay.io/go-skynet/local-ai:latest-aio-cpu
-  
-  log_success "LocalAI container image downloaded"
-  log_info "To run LocalAI, use: Start AI Runner from the menu"
-  pause
-}
 
-uninstall_localai() {
-  show_banner
-  log_step "Uninstalling LocalAI..."
-  echo
-  
-  if [[ -z "$CONTAINER_CMD" ]]; then
-    log_warn "No container runtime detected"
-    pause
-    return 0
-  fi
-  
-  # Stop and remove container
-  $CONTAINER_CMD stop localai 2>/dev/null || true
-  $CONTAINER_CMD rm localai 2>/dev/null || true
-  
-  # Remove image
-  $CONTAINER_CMD rmi quay.io/go-skynet/local-ai:latest-aio-cpu 2>/dev/null || true
-  
-  # Remove data
-  rm -rf "${PROJECT_ROOT}/localai-models"
-  
-  log_success "LocalAI uninstalled"
-  pause
-}
 
 install_llamacpp() {
   show_banner
@@ -1061,7 +980,7 @@ install_llamacpp() {
   log_info "Building llama.cpp..."
   cd "$LLAMACPP_DIR"
   make clean
-  make -j$(nproc 2>/dev/null || echo 4)
+  make -j"$(nproc 2>/dev/null || echo 4)"
   
   if [[ -f "${LLAMACPP_DIR}/main" ]]; then
     log_success "llama.cpp built successfully"
@@ -1160,7 +1079,7 @@ start_runner() {
   echo "Which AI runner do you want to start?"
   echo
   echo "  1) Ollama"
-  echo "  2) LocalAI (container)"
+  echo "  2) llama.cpp (manual)"
   echo "  3) llama.cpp (manual)"
   echo "  4) text-generation-webui"
   echo "  0) Cancel"
@@ -1180,20 +1099,7 @@ start_runner() {
       fi
       ;;
     2)
-      if [[ -z "$CONTAINER_CMD" ]]; then
-        log_error "No container runtime available"
-        pause
-        return 1
-      fi
-      log_info "Starting LocalAI container..."
-      mkdir -p "${PROJECT_ROOT}/localai-models"
-      $CONTAINER_CMD run -d \
-        --name localai \
-        -p 8080:8080 \
-        -v "${PROJECT_ROOT}/localai-models:/build/models:Z" \
-        quay.io/go-skynet/local-ai:latest-aio-cpu
-      log_success "LocalAI started"
-      log_info "Access at: http://localhost:8080"
+      log_info "Local runner support: use llama.cpp or Ollama instead"
       ;;
     3)
       if [[ ! -f "${LLAMACPP_DIR}/main" ]]; then
@@ -1238,8 +1144,7 @@ stop_runner() {
   echo "Which AI runner do you want to stop?"
   echo
   echo "  1) Ollama"
-  echo "  2) LocalAI (container)"
-  echo "  3) text-generation-webui"
+  echo "  2) text-generation-webui"
   echo "  0) Cancel"
   echo
   read -p "Select runner [0-3]: " -r choice
@@ -1251,15 +1156,6 @@ stop_runner() {
       log_success "Ollama service stopped"
       ;;
     2)
-      if [[ -n "$CONTAINER_CMD" ]]; then
-        log_info "Stopping LocalAI container..."
-        $CONTAINER_CMD stop localai 2>/dev/null || log_warn "Container not running"
-        log_success "LocalAI stopped"
-      else
-        log_error "No container runtime available"
-      fi
-      ;;
-    3)
       log_info "Stopping text-generation-webui..."
       pkill -f "text-generation-webui" || log_warn "Process not found"
       log_success "text-generation-webui stopped"
@@ -1324,19 +1220,7 @@ health_check_dashboard() {
       echo "  ${RED}${NC} Ollama: Not installed"
     fi
     
-    # LocalAI
-    if [[ -n "$CONTAINER_CMD" ]]; then
-      if $CONTAINER_CMD ps --filter name=localai --format '{{.Status}}' 2>/dev/null | grep -q "Up"; then
-        echo "  ${GREEN}OK${NC} LocalAI: Running (port 8080)"
-        echo "    → http://localhost:8080"
-      else
-        if $CONTAINER_CMD images | grep -q "local-ai"; then
-          echo "  ${YELLOW}${NC} LocalAI: Installed, not running"
-        else
-          echo "  ${RED}${NC} LocalAI: Not installed"
-        fi
-      fi
-    fi
+    # LocalAI runner support removed
     
     # llama.cpp
     if [[ -f "${LLAMACPP_DIR}/main" ]]; then
@@ -1462,17 +1346,7 @@ check_installed_runners() {
   fi
   echo
   
-  # Check LocalAI
-  if [[ -n "$CONTAINER_CMD" ]]; then
-    if $CONTAINER_CMD images | grep -q "local-ai"; then
-      log_success "LocalAI: Container image available"
-      echo "  Status: $($CONTAINER_CMD ps -a --filter name=localai --format '{{.Status}}' 2>/dev/null || echo 'not running')"
-    else
-      log_warn "LocalAI: Not installed"
-    fi
-  else
-    log_warn "LocalAI: Cannot check (no container runtime)"
-  fi
+  # LocalAI runner support removed from this script
   echo
   
   # Check llama.cpp
@@ -1509,22 +1383,22 @@ interactive_model_selector() {
   echo "==========================================================="
   echo
   echo "Large Language Models:"
-  echo "  1) Llama 2 7B (4GB RAM)"
-  echo "  2) Llama 2 13B (8GB RAM)"
-  echo "  3) Mistral 7B (4GB RAM)"
-  echo "  4) Mixtral 8x7B (24GB RAM)"
-  echo "  5) CodeLlama 7B (4GB RAM)"
+  echo "  1) Llama 2 7B (4GB RAM)         — general-purpose assistant, chat and instruction tuning"
+  echo "  2) Llama 2 13B (8GB RAM)        — stronger reasoning and multi-turn dialogue than 7B"
+  echo "  3) Mistral 7B (4GB RAM)         — high-efficiency open-weight LLM for diverse tasks"
+  echo "  4) Mixtral 8x7B (24GB RAM)     — ensemble-style model for high-capacity generation"
+  echo "  5) CodeLlama 7B (4GB RAM)      — optimized for code understanding and generation"
   echo
   echo "Specialized Models:"
-  echo "  6) TinyLlama 1.1B (1GB RAM)"
-  echo "  7) Phi-2 2.7B (2GB RAM)"
-  echo "  8) Neural Chat 7B (4GB RAM)"
-  echo "  9) Orca Mini 3B (2GB RAM)"
-  echo "  10) Vicuna 7B (4GB RAM)"
+  echo "  6) TinyLlama 1.1B (1GB RAM)     — tiny conversational agent for low-resource devices"
+  echo "  7) Phi-2 2.7B (2GB RAM)         — compact model tuned for instruction following"
+  echo "  8) Neural Chat 7B (4GB RAM)     — chat-optimized model with safety/turn-taking tuning"
+  echo "  9) Orca Mini 3B (2GB RAM)       — lightweight assistant with solid reasoning for small hosts"
+  echo "  10) Vicuna 7B (4GB RAM)         — community-tuned chat model derived from LLaMA weights"
   echo
   echo "Vision Models:"
-  echo "  11) LLaVA 7B (5GB RAM)"
-  echo "  12) BakLLaVA 7B (5GB RAM)"
+  echo "  11) LLaVA 7B (5GB RAM)          — multimodal (image+text) reasoning and VQA"
+  echo "  12) BakLLaVA 7B (5GB RAM)       — vision-language variant optimized for image-grounded chat"
   echo
   echo "  0) Cancel"
   echo
@@ -1556,9 +1430,7 @@ interactive_model_selector() {
   
   log_info "Downloading $model_name with Ollama..."
   echo
-  ollama pull "$model_name"
-  
-  if [[ $? -eq 0 ]]; then
+  if ollama pull "$model_name"; then
     log_success "Model downloaded: $model_name"
     echo
     read -p "Test the model now? [y/N]: " -r reply
@@ -1676,8 +1548,10 @@ setup_batch_download_helper() {
   # Get system info
   log_info "Detecting your system..."
   echo
-  local total_ram=$(free -g | awk '/^Mem:/{print $2}')
-  local free_disk=$(df -BG . | awk 'NR==2{print $4}' | sed 's/G//')
+  local total_ram
+  total_ram=$(free -g | awk '/^Mem:/{print $2}')
+  local free_disk
+  free_disk=$(df -BG . | awk 'NR==2{print $4}' | sed 's/G//')
   echo "  Total RAM: ${total_ram}GB"
   echo "  Free Disk: ${free_disk}GB"
   echo
@@ -1713,7 +1587,7 @@ setup_batch_download_helper() {
   fi
   echo
   
-  read -p "Select profile [0-6, Enter for recommended]: " choice
+  read -r -p "Select profile [0-6, Enter for recommended]: " choice
   
   # Use recommended if user just presses Enter
   if [[ -z "$choice" ]]; then
@@ -1786,7 +1660,8 @@ setup_batch_download_helper() {
     echo
     
     # Count models
-    local model_count=$(grep -v "^#" "${PROJECT_ROOT}/config/models_batch.txt" | grep -v "^$" | wc -l)
+    local model_count
+    model_count=$(grep -cvE '(^#|^$)' "${PROJECT_ROOT}/config/models_batch.txt" 2>/dev/null || true)
     echo "Total models: $model_count"
     echo
     
@@ -2187,7 +2062,7 @@ remove_model_files() {
   if [[ -d "${models_dir}/${model_name}" ]]; then
     read -p "Remove ${model_name}? [y/N]: " -r reply
     if [[ "$reply" =~ ^[Yy]$ ]]; then
-      rm -rf "${models_dir}/${model_name}"
+      rm -rf "${models_dir:?}/${model_name}"
       log_success "Model removed: $model_name"
     else
       log_info "Cancelled"
@@ -2307,12 +2182,15 @@ view_system_logs() {
   
   if [[ -d "$LOG_DIR" ]] && [[ -n "$(ls -A "$LOG_DIR" 2>/dev/null)" ]]; then
     log_info "Recent log files:"
-    ls -lht "$LOG_DIR" | head -10
+    # Use find+sort to list recent files robustly (avoid relying on ls parsing)
+    recent_files=$(find "$LOG_DIR" -maxdepth 1 -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk '{print $2}' | head -10)
+    if [[ -n "$recent_files" ]]; then
+      while IFS= read -r f; do ls -lht -- "$f"; done <<< "$recent_files"
+    fi
     echo
-    read -p "View latest log? [y/N]: " -r reply
+    read -r -p "View latest log? [y/N]: " reply
     if [[ "$reply" =~ ^[Yy]$ ]]; then
-      local latest_log
-      latest_log=$(ls -t "$LOG_DIR"/ollamatrauma_*.log 2>/dev/null | head -1)
+      latest_log=$(find "$LOG_DIR" -maxdepth 1 -type f -name 'ollamatrauma_*.log' -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk '{print $2; exit}')
       if [[ -n "$latest_log" ]]; then
         less "$latest_log"
       else
@@ -2333,7 +2211,6 @@ view_ai_runner_logs() {
   
   echo "Select runner to view logs:"
   echo "  1) Ollama (systemd)"
-  echo "  2) LocalAI (container)"
   echo "  0) Cancel"
   echo
   read -p "Select [0-2]: " -r choice
@@ -2343,14 +2220,7 @@ view_ai_runner_logs() {
       log_info "Ollama service logs:"
       journalctl -u ollama -n 50 --no-pager || log_error "Could not read logs"
       ;;
-    2)
-      if [[ -n "$CONTAINER_CMD" ]]; then
-        log_info "LocalAI container logs:"
-        $CONTAINER_CMD logs localai --tail 50 || log_error "Could not read logs"
-      else
-        log_error "No container runtime available"
-      fi
-      ;;
+    # LocalAI logs removed
     0)
       log_info "Cancelled"
       ;;
@@ -2367,7 +2237,8 @@ backup_project_data() {
   log_step "Backup Project Data"
   echo
   
-  local backup_name="ollamatrauma_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
+  local backup_name
+  backup_name="ollamatrauma_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
   local backup_path="${BACKUP_DIR}/${backup_name}"
   
   mkdir -p "$BACKUP_DIR"
@@ -2509,7 +2380,7 @@ ai_runners_menu() {
     echo
     echo "  Installation:"
     echo "    1) Install Ollama"
-    echo "    2) Install LocalAI"
+    echo "    2) Install Aider"
     echo "    3) Install llama.cpp"
     echo "    4) Install text-generation-webui"
     echo
@@ -2528,7 +2399,7 @@ ai_runners_menu() {
 
     case "$choice" in
       1) run_menu_action install_ollama ;;
-      2) run_menu_action install_localai ;;
+      2) run_menu_action install_aider ;;
       3) run_menu_action install_llamacpp ;;
       4) run_menu_action install_textgen_webui ;;
       5) run_menu_action start_runner ;;
@@ -2693,7 +2564,7 @@ uninstall_submenu() {
     echo "==========================================================="
     echo
     echo "  1) Uninstall Ollama"
-    echo "  2) Uninstall LocalAI"
+    echo "  2) Uninstall Aider"
     echo "  3) Uninstall llama.cpp"
     echo "  4) Uninstall text-generation-webui"
     echo "  0) Back to AI Runners Management"
@@ -2702,7 +2573,7 @@ uninstall_submenu() {
 
     case "$choice" in
       1) run_menu_action uninstall_ollama ;;
-      2) run_menu_action uninstall_localai ;;
+      2) run_menu_action uninstall_aider ;;
       3) run_menu_action uninstall_llamacpp ;;
       4) run_menu_action uninstall_textgen_webui ;;
       0) return 0 ;;
@@ -2732,16 +2603,7 @@ quick_run() {
     fi
   fi
   
-  if command -v localai &>/dev/null; then
-    log_info "LocalAI detected"
-    echo
-    read -p "Run default model with LocalAI? [y/N]: " -r reply
-    if [[ "$reply" =~ ^[Yy]$ ]]; then
-      log_step "Running model with LocalAI..."
-      localai run default || log_error "LocalAI run failed"
-      return
-    fi
-  fi
+  # Aider runtime may be available via 'aider' command (manual start)
   
   if command -v docker &>/dev/null; then
     log_info "Docker detected"
@@ -2766,7 +2628,7 @@ quick_run() {
   fi
   
   log_warn "No compatible AI runner or container found"
-  echo "Please install Ollama, LocalAI, Docker, or Podman"
+  echo "Please install Ollama, Docker, or Podman"
   echo "Then, configure the runner in settings"
   pause
 }
@@ -2919,6 +2781,7 @@ setup_container_runtime() {
 
 # Only one definition needed!
 run_menu_action() {
+  # shellcheck disable=SC2317
   "$@" || log_error "Action '$*' failed"
 }
 

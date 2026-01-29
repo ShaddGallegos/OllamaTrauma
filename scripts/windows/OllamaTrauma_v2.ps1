@@ -4,7 +4,7 @@
     
 .DESCRIPTION
     Unified Bootstrap + AI Runner Manager for Windows
-    Supports: Ollama, LocalAI, llama.cpp, text-generation-webui
+    Supports: Ollama, llama.cpp, text-generation-webui
     Container Runtime: Docker (Podman support via WSL)
     
 .NOTES
@@ -30,7 +30,6 @@ $Global:ProjectRoot = $Global:ScriptDir
 
 # Paths
 $Global:LlamaCppDir = Join-Path $Global:ProjectRoot "llama.cpp"
-$Global:LocalAIContainer = "localai"
 $Global:TextGenDir = Join-Path $Global:ProjectRoot "text-generation-webui"
 $Global:BackupDir = Join-Path $Global:ProjectRoot ".backups"
 $Global:LogDir = Join-Path $Global:ProjectRoot "data\logs"

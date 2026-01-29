@@ -143,6 +143,17 @@ def search_by_tag(tag, fetch_limit=FETCH_LIMIT):
     return filtered
 
 
+def search_by_keyword(keyword, fetch_limit=FETCH_LIMIT):
+    """Search models by a keyword across name, tags and description/card text.
+
+    Uses the HF API general `search` which matches keywords in model id, name,
+    tags and the model card/description when available.
+    """
+    ensure_api()
+    models = api.list_models(search=keyword, limit=fetch_limit)
+    return models
+
+
 def _parse_b_from_id(repo_id):
     # heuristic: look for patterns like '7b', '13B', '3.5b'
     import re
@@ -188,6 +199,18 @@ def rank_models(models, top_n=TOP_N, sort_mode="composite", require_weights=Fals
     if sort_mode == "downloads":
         items.sort(key=lambda x: x["downloads"], reverse=True)
         return [(x["downloads"], x["repo_id"], x["model"]) for x in items[:top_n]]
+
+    if sort_mode == "likes_among_downloads":
+        # Select a window of top-download models, then pick highest liked among them.
+        items.sort(key=lambda x: x["downloads"], reverse=True)
+        # Window size: at least top_n*5 or 50, bounded by available items
+        window = min(len(items), max(50, top_n * 5))
+        windowed = items[:window]
+        windowed.sort(key=lambda x: x["likes"], reverse=True)
+        out = []
+        for x in windowed[:top_n]:
+            out.append((int(x.get("downloads", 0)), x["repo_id"], x["model"], x))
+        return out
 
     if sort_mode == "likes":
         items.sort(key=lambda x: x["likes"], reverse=True)
@@ -369,30 +392,22 @@ def interactive_menu():
     while True:
         print("\nHugging Face Model Search")
         print("0) Exit")
-        print("1) Search by name keyword")
-        print("2) Search by tag keyword")
+        print("1) Search by keyword (name, tag or description)")
         choice = input("> ").strip()
         if choice == "0":
             print("Exiting.")
             return
         if choice == "1":
-            keyword = input("Enter name keyword (or 0 to cancel): ").strip()
+            keyword = input("Enter keyword (or 0 to cancel): ").strip()
             if keyword == "0":
                 continue
-            print(f"Searching for name keyword: {keyword}...")
-            models = search_by_name(keyword)
-            scored = rank_models(models, top_n=TOP_N, sort_mode="composite")
-            show_top_list(scored)
-        elif choice == "2":
-            tag = input("Enter tag keyword (or 0 to cancel): ").strip()
-            if tag == "0":
-                continue
-            print(f"Searching for tag: {tag}...")
-            models = search_by_tag(tag)
-            scored = rank_models(models, top_n=TOP_N, sort_mode="composite")
+            print(f"Searching for keyword: {keyword}... (name, tags, description)")
+            models = search_by_keyword(keyword)
+            # Rank by download popularity first, then prefer highest liked among top downloads
+            scored = rank_models(models, top_n=TOP_N, sort_mode="likes_among_downloads")
             show_top_list(scored)
         else:
-            print("Invalid choice — enter 0, 1 or 2.")
+            print("Invalid choice — enter 0 or 1.")
 
 
 def one_shot_name(keyword):
@@ -411,23 +426,67 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Hugging Face model search CLI")
     parser.add_argument("--name", help="Search by name keyword (one-shot)")
     parser.add_argument("--tag", help="Search by tag keyword (one-shot)")
-    parser.add_argument("--sort", choices=["composite", "downloads", "likes"], default="composite", help="Ranking strategy for results")
+    parser.add_argument("--sort", choices=["composite", "downloads", "likes", "likes_among_downloads"], default="composite", help="Ranking strategy for results")
     parser.add_argument("--limit", type=int, default=FETCH_LIMIT, help="How many model candidates to fetch from HF before ranking")
     parser.add_argument("--top", type=int, default=TOP_N, help="How many top results to show")
     parser.add_argument("--require-weights", action="store_true", help="Only show models that include downloadable weight files (gguf/safetensors/bin)")
     parser.add_argument("--gguf-only", action="store_true", help="Only show models that expose GGUF weight files")
     parser.add_argument("--max-b", type=float, default=None, help="Maximum model size in billions of parameters (e.g. 7 for 7B). If provided, models larger than this will be excluded unless they provide local weights).")
     parser.add_argument("--inspect", help="Inspect a specific model id for weight files and suitability")
+    parser.add_argument("--json", action="store_true", help="Output top results as JSON (machine-readable)")
     args = parser.parse_args()
     if args.name:
         models = search_by_name(args.name, fetch_limit=args.limit)
         scored = rank_models(models, top_n=args.top, sort_mode=args.sort, require_weights=args.require_weights, gguf_only=args.gguf_only, max_b=args.max_b)
-        show_top_list(scored)
+        if args.json:
+            out = []
+            for item in scored:
+                # scored entries may be (dl, repo_id, m, meta) or (dl, repo_id, m)
+                if len(item) == 4:
+                    dl, repo_id, m, meta = item
+                else:
+                    dl, repo_id, m = item
+                    meta = {}
+                rec = {
+                    "repo_id": repo_id,
+                    "downloads": int(meta.get("downloads", dl or 0)),
+                    "likes": int(meta.get("likes", 0) or 0),
+                    "tags": list(getattr(m, "tags", []) or []),
+                    "pipeline_tag": getattr(m, "pipeline_tag", ""),
+                    "weight_types": meta.get("weight_types", []),
+                    "owner": meta.get("owner", ""),
+                    "lastmod": str(meta.get("lastmod") or getattr(m, "lastModified", "")),
+                }
+                out.append(rec)
+            print(json.dumps(out))
+        else:
+            show_top_list(scored)
         sys.exit(0)
     if args.tag:
         models = search_by_tag(args.tag, fetch_limit=args.limit)
         scored = rank_models(models, top_n=args.top, sort_mode=args.sort, require_weights=args.require_weights, gguf_only=args.gguf_only, max_b=args.max_b)
-        show_top_list(scored)
+        if args.json:
+            out = []
+            for item in scored:
+                if len(item) == 4:
+                    dl, repo_id, m, meta = item
+                else:
+                    dl, repo_id, m = item
+                    meta = {}
+                rec = {
+                    "repo_id": repo_id,
+                    "downloads": int(meta.get("downloads", dl or 0)),
+                    "likes": int(meta.get("likes", 0) or 0),
+                    "tags": list(getattr(m, "tags", []) or []),
+                    "pipeline_tag": getattr(m, "pipeline_tag", ""),
+                    "weight_types": meta.get("weight_types", []),
+                    "owner": meta.get("owner", ""),
+                    "lastmod": str(meta.get("lastmod") or getattr(m, "lastModified", "")),
+                }
+                out.append(rec)
+            print(json.dumps(out))
+        else:
+            show_top_list(scored)
         sys.exit(0)
 
     if args.inspect:

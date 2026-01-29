@@ -2,7 +2,7 @@
 #
 # OllamaTrauma v2 - Unified Bootstrap + AI Runner Manager
 # Combines project initialization, dependency management, and AI runner operations
-# Supports: Ollama, LocalAI, llama.cpp, text-generation-webui
+# Supports: Ollama, llama.cpp, text-generation-webui
 # Container Runtime: Podman (preferred) or Docker
 #
 
@@ -20,6 +20,7 @@ IFS=$'\n\t'
 # CONFIGURATION
 # ============================================================================
 readonly SCRIPT_VERSION="2.1.0"
+# shellcheck disable=SC2034
 readonly PROJECT_NAME="OllamaTrauma"
 _script_dir_tmp="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR="${_script_dir_tmp}"
@@ -27,7 +28,6 @@ readonly PROJECT_ROOT="${SCRIPT_DIR}"
 
 # Paths
 readonly LLAMACPP_DIR="${PROJECT_ROOT}/llama.cpp"
-readonly LOCALAI_CONTAINER="localai"
 readonly TEXTGEN_DIR="${PROJECT_ROOT}/text-generation-webui"
 readonly BACKUP_DIR="${PROJECT_ROOT}/.backups"
 readonly LOG_DIR="${PROJECT_ROOT}/data/logs"
@@ -57,6 +57,18 @@ OS=""
 OS_VERSION=""
 PACKAGE_MANAGER=""
 
+AUTO_MODE=0
+AUTO_CHOICE=""
+## shellcheck disable=SC2034
+AUTO_CHAT_MODE=""   # preferred chat backend: ollama|llama
+## shellcheck disable=SC2034
+AUTO_USE_GPU=0      # container GPU preference
+AUTO_USE_CUDA=0     # use CUDA for llama.cpp
+AUTO_STREAM=0       # stream responses when available
+AUTO_MODEL=""      # model name/path to use for chat
+AUTO_MESSAGE=""    # single message to send in auto mode
+
+
 # Container runtime - Podman is preferred (rootless capable), Docker as fallback
 CONTAINER_CMD=""
 
@@ -84,6 +96,16 @@ log_step() {
   echo -e "${BLUE}[STEP]${NC} $*" | tee -a "$LOG_FILE"
 }
 
+log_debug() {
+  if [[ "${DEBUG:-0}" -eq 1 ]]; then
+    echo -e "${MAGENTA}[DEBUG]${NC} $*" | tee -a "$LOG_FILE"
+  fi
+}
+
+log_success() {
+  echo -e "${GREEN}[OK]${NC} $*" | tee -a "$LOG_FILE"
+}
+
 # JVM workaround: disable Perf shared memory to avoid SIGBUS crashes in some JDK builds
 # Toggle with environment variable: ENABLE_JVM_PERF_WORKAROUND=0 to disable
 # The script will probe the local `java` to find which Perf flag name it accepts
@@ -102,9 +124,9 @@ choose_java_perf_flag() {
     return 0
   fi
 
-  for f in "${candidates[@]}"; do
+    for f in "${candidates[@]}"; do
     # Probe java to see if it accepts the flag. Use -version to keep it non-invasive.
-    if java -XX:+${f} -version >/dev/null 2>&1; then
+    if java -XX:+"${f}" -version >/dev/null 2>&1; then
       JAVA_PERF_FLAG="-XX:+${f}"
       log_info "Detected JVM accepts flag: ${JAVA_PERF_FLAG}"
       break
@@ -144,20 +166,21 @@ install_nvidia_components() {
         ubuntu|debian)
           log_info "Adding NVIDIA apt repositories for drivers and container toolkit"
           if [[ -f /etc/os-release ]]; then
+            # shellcheck disable=SC1091
             distribution=$(source /etc/os-release && echo "${ID}${VERSION_ID}")
           else
             distribution="${OS}"
           fi
           sudo mkdir -p /etc/apt/keyrings || true
           curl -fsSL https://nvidia.github.io/nvidia-docker/gpgkey | sudo gpg --dearmor -o /etc/apt/keyrings/nvidia-docker.gpg || true
-          curl -s -L https://nvidia.github.io/nvidia-docker/${distribution}/nvidia-docker.list \
+          curl -s -L https://nvidia.github.io/nvidia-docker/"${distribution}"/nvidia-docker.list \
             | sed 's#deb https://#deb [signed-by=/etc/apt/keyrings/nvidia-docker.gpg] https://#g' \
             | sudo tee /etc/apt/sources.list.d/nvidia-docker.list >/dev/null || true
 
           # Attempt to add CUDA repo as well (best-effort)
-          curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/${distribution}/x86_64/7fa2af80.pub \
+          curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/"${distribution}"/x86_64/7fa2af80.pub \
             | sudo gpg --dearmor -o /etc/apt/keyrings/nvidia-cuda.gpg || true
-          echo "deb [signed-by=/etc/apt/keyrings/nvidia-cuda.gpg] https://developer.download.nvidia.com/compute/cuda/repos/${distribution}/x86_64/ /" \
+          echo "deb [signed-by=/etc/apt/keyrings/nvidia-cuda.gpg] https://developer.download.nvidia.com/compute/cuda/repos/""${distribution}""/x86_64/ /" \
             | sudo tee /etc/apt/sources.list.d/nvidia-cuda.list >/dev/null || true
 
           sudo apt-get update -y || true
@@ -167,14 +190,15 @@ install_nvidia_components() {
         fedora|centos|rhel)
           log_info "Adding NVIDIA yum/dnf repositories for nvidia-container-toolkit"
           if [[ -f /etc/os-release ]]; then
+            # shellcheck disable=SC1091
             distribution=$(source /etc/os-release && echo "${ID}${VERSION_ID}")
           else
             distribution="${OS}"
           fi
           # Add nvidia-docker repo
-          curl -s -L https://nvidia.github.io/nvidia-docker/${distribution}/nvidia-docker.repo | sudo tee /etc/yum.repos.d/nvidia-docker.repo >/dev/null || true
+          curl -s -L https://nvidia.github.io/nvidia-docker/"${distribution}"/nvidia-docker.repo | sudo tee /etc/yum.repos.d/nvidia-docker.repo >/dev/null || true
           # Add CUDA repo (best-effort)
-          curl -s -L https://developer.download.nvidia.com/compute/cuda/repos/${distribution}/x86_64/cuda.repo | sudo tee /etc/yum.repos.d/cuda.repo >/dev/null || true
+          curl -s -L https://developer.download.nvidia.com/compute/cuda/repos/"${distribution}"/x86_64/cuda.repo | sudo tee /etc/yum.repos.d/cuda.repo >/dev/null || true
           if command -v dnf >/dev/null 2>&1; then
             sudo dnf -y install akmod-nvidia || true
           else
@@ -354,6 +378,45 @@ SPARKWORK"
 detect_and_apply_spark_workaround || true
 
 
+# Detect available GPUs (sets GPU_AVAILABLE=1/0 and GPU_VENDOR)
+detect_gpus() {
+  GPU_AVAILABLE=0
+  GPU_VENDOR=""
+  CUDA_AVAILABLE=0
+
+  # NVIDIA
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    GPU_AVAILABLE=1
+    GPU_VENDOR="nvidia"
+    log_info "NVIDIA GPU detected (nvidia-smi available)"
+  fi
+
+  # ROCm / AMD
+  if [[ ${GPU_AVAILABLE} -ne 1 ]] && command -v rocminfo >/dev/null 2>&1; then
+    GPU_AVAILABLE=1
+    GPU_VENDOR="amd"
+    log_info "AMD GPU detected (rocminfo available)"
+  fi
+
+  # OpenCL fallback
+  if [[ ${GPU_AVAILABLE} -ne 1 ]] && command -v clinfo >/dev/null 2>&1; then
+    GPU_AVAILABLE=1
+    GPU_VENDOR="opencl"
+    log_info "OpenCL-capable device detected (clinfo available)"
+  fi
+
+  # Check for CUDA toolkit
+  if command -v nvcc >/dev/null 2>&1; then
+    CUDA_AVAILABLE=1
+    log_info "CUDA toolkit detected (nvcc available)"
+  fi
+
+  if [[ ${GPU_AVAILABLE} -ne 1 ]]; then
+    log_info "No GPU detected"
+  else
+    log_info "GPU_AVAILABLE=${GPU_AVAILABLE}, GPU_VENDOR=${GPU_VENDOR}, CUDA_AVAILABLE=${CUDA_AVAILABLE}"
+  fi
+}
 
 gpu_runonce_setup() {
   # Ensure data directories exist
@@ -370,7 +433,6 @@ gpu_runonce_setup() {
     fi
     return 0
   fi
-
   # Only attempt heavy installs on systems with GPUs
   if [[ "${GPU_AVAILABLE:-0}" -ne 1 ]]; then
     log_info "No GPU detected; skipping GPU run-once build. Creating marker to avoid repeated checks."
@@ -409,22 +471,22 @@ gpu_runonce_setup() {
   if command -v nvcc >/dev/null 2>&1; then
     log_info "nvcc found; configuring CMake with GGML_CUDA=ON"
     if cmake "$LLAMA_SRC_DIR" -DGGML_CUDA=ON >/dev/null 2>&1; then
-      if cmake --build . -j$(nproc); then
+      if cmake --build . -j"$(nproc)"; then
         log_success "Built llama.cpp with CUDA support"
       else
         log_warn "Build failed with GGML_CUDA; falling back to CPU build"
         cmake "$LLAMA_SRC_DIR" -DGGML_CUDA=OFF || true
-        cmake --build . -j$(nproc) || true
+        cmake --build . -j"$(nproc)" || true
       fi
     else
       log_warn "CMake configure with GGML_CUDA failed; trying CPU build"
       cmake "$LLAMA_SRC_DIR" -DGGML_CUDA=OFF || true
-      cmake --build . -j$(nproc) || true
+      cmake --build . -j"$(nproc)" || true
     fi
   else
     log_info "nvcc not found; performing CPU build"
     cmake "$LLAMA_SRC_DIR" -DGGML_CUDA=OFF || true
-    cmake --build . -j$(nproc) || true
+    cmake --build . -j"$(nproc)" || true
   fi
 
   popd >/dev/null || true
@@ -505,6 +567,7 @@ debug_mode() {
     "check_dependencies:Dependency checker"
     "install_system_dependencies:System package installer"
     "install_python_packages:Python package installer"
+    "install_mcp_components:MCP components"
     "setup_container_runtime:Container runtime setup"
     "setup_rootless_podman:Rootless Podman setup"
   )
@@ -526,12 +589,12 @@ debug_mode() {
   local runner_funcs=(
     "install_ollama:Ollama installer"
     "uninstall_ollama:Ollama uninstaller"
-    "install_localai:LocalAI installer"
-    "uninstall_localai:LocalAI uninstaller"
     "install_llamacpp:llama.cpp installer"
     "uninstall_llamacpp:llama.cpp uninstaller"
     "install_textgen_webui:text-generation-webui installer"
     "uninstall_textgen_webui:text-generation-webui uninstaller"
+    "install_aider:Aider installer"
+    "uninstall_aider:Aider uninstaller"
     "start_runner:Start AI runner"
     "stop_runner:Stop AI runner"
     "check_installed_runners:Check installed runners"
@@ -768,6 +831,30 @@ detect_container_runtime() {
   fi
 }
 
+# Determine container GPU flags based on detected runtime
+detect_container_gpu_flags() {
+  CONTAINER_GPU_FLAGS_ARRAY=( )
+  CONTAINER_GPU_ENVS=( )
+  if [[ -z "${CONTAINER_CMD}" ]]; then
+    return 0
+  fi
+
+  case "${CONTAINER_CMD}" in
+    docker)
+      # Docker supports --gpus
+      CONTAINER_GPU_FLAGS_ARRAY=(--gpus all)
+      ;;
+    podman)
+      # Podman: prefer passing device nodes and NVIDIA env vars (best-effort)
+      CONTAINER_GPU_FLAGS_ARRAY=(--device /dev/nvidiactl --device /dev/nvidia-uvm --device /dev/nvidia0 --security-opt seccomp=unconfined)
+      CONTAINER_GPU_ENVS+=("-e" "NVIDIA_VISIBLE_DEVICES=all")
+      ;;
+    *)
+      CONTAINER_GPU_FLAGS_ARRAY=()
+      ;;
+  esac
+}
+
 setup_rootless_podman() {
   local current_user="$USER"
   local user_id
@@ -876,6 +963,7 @@ trap 'log_error "Terminated"; exit 143' TERM
 
 detect_os() {
   if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
     . /etc/os-release
     OS="${ID}"
     OS_VERSION="${VERSION_ID:-unknown}"
@@ -1160,6 +1248,31 @@ install_python_packages() {
   log_success "Python packages installed"
 }
 
+install_mcp_components() {
+  log_step "Ensuring MCP components are available..."
+
+  # Ensure system deps (python3, pip, jq) are present via existing system installer
+  if ! command -v python3 >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+    log_info "Some MCP system deps missing; running install_system_dependencies"
+    install_system_dependencies || log_warn "install_system_dependencies failed; please install python3/pip/jq manually"
+  fi
+
+  # Ensure pip packages from requirements are installed (idempotent)
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -m pip install --user --upgrade pip || true
+    if [[ -f "${PROJECT_ROOT}/requirements.txt" ]]; then
+      python3 -m pip install --user -r "${PROJECT_ROOT}/requirements.txt" || true
+    fi
+  fi
+
+  # Create MCP directories
+  mkdir -p "${PROJECT_ROOT}/mcp/contexts"
+  mkdir -p "${PROJECT_ROOT}/mcp/requests"
+  chmod -R 700 "${PROJECT_ROOT}/mcp" || true
+
+  log_success "MCP components initialized (mcp/contexts, mcp/requests)."
+}
+
 # Comprehensive dependency check - runs at startup
 check_all_dependencies() {
   local missing=0
@@ -1352,54 +1465,7 @@ uninstall_ollama() {
   pause
 }
 
-install_localai() {
-  show_banner
-  log_step "Installing LocalAI..."
-  echo
-  
-  if [[ -z "$CONTAINER_CMD" ]]; then
-    log_error "No container runtime detected. Please install Docker or Podman first."
-    pause
-    return 1
-  fi
-  
-  # Check system resources before installation
-  if ! show_resource_warning "LocalAI installation"; then
-    return 1
-  fi
-  
-  log_info "Pulling LocalAI container image..."
-  $CONTAINER_CMD pull quay.io/go-skynet/local-ai:latest-aio-cpu
-  
-  log_success "LocalAI container image downloaded"
-  log_info "To run LocalAI, use: Start AI Runner from the menu"
-  pause
-}
 
-uninstall_localai() {
-  show_banner
-  log_step "Uninstalling LocalAI..."
-  echo
-  
-  if [[ -z "$CONTAINER_CMD" ]]; then
-    log_warn "No container runtime detected"
-    pause
-    return 0
-  fi
-  
-  # Stop and remove container
-  $CONTAINER_CMD stop localai 2>/dev/null || true
-  $CONTAINER_CMD rm localai 2>/dev/null || true
-  
-  # Remove image
-  $CONTAINER_CMD rmi quay.io/go-skynet/local-ai:latest-aio-cpu 2>/dev/null || true
-  
-  # Remove data
-  rm -rf "${PROJECT_ROOT}/localai-models"
-  
-  log_success "LocalAI uninstalled"
-  pause
-}
 
 install_llamacpp() {
   show_banner
@@ -1427,7 +1493,7 @@ install_llamacpp() {
   log_info "Building llama.cpp..."
   cd "$LLAMACPP_DIR" || return
   make clean
-  make -j$(nproc 2>/dev/null || echo 4)
+  make -j"$(nproc 2>/dev/null || echo 4)"
   
   if [[ -f "${LLAMACPP_DIR}/main" ]]; then
     log_success "llama.cpp built successfully"
@@ -1436,6 +1502,105 @@ install_llamacpp() {
   fi
   
   cd "$PROJECT_ROOT" || return
+  pause
+}
+
+
+install_aider() {
+  show_banner
+  log_step "Installing Aider (CLI + optional server)..."
+  echo
+
+  if command -v aider &>/dev/null; then
+    log_info "Aider appears to be already installed: $(command -v aider)"
+    pause
+    return 0
+  fi
+
+  if ! command -v python3 &>/dev/null; then
+    log_error "python3 not found; please install python3 before installing Aider"
+    pause
+    return 1
+  fi
+
+  # Try installing the server extras; fall back to base package
+  python3 -m pip install --user --upgrade pip || true
+  if python3 -m pip install --user "aider[server]" >/dev/null 2>&1; then
+    log_success "Aider installed (server extras)"
+  elif python3 -m pip install --user aider >/dev/null 2>&1; then
+    log_success "Aider installed (base package)"
+  else
+    log_error "Aider installation failed via pip; see pip output above"
+    pause
+    return 1
+  fi
+
+  log_info "Installed Aider. To run the Aider server: 'aider server' or see https://aider.chat/docs/install.html"
+  pause
+}
+
+uninstall_aider() {
+  show_banner
+  log_step "Uninstalling Aider..."
+  echo
+  if ! command -v python3 &>/dev/null; then
+    log_warn "python3 not available; skipping pip uninstall"
+    pause
+    return 0
+  fi
+  python3 -m pip uninstall -y aider || true
+  log_success "Aider uninstalled (pip) — config files may remain in your home directory"
+  pause
+}
+
+start_aider() {
+  show_banner
+  log_step "Starting Aider server (background)"
+  echo
+  if ! command -v aider &>/dev/null; then
+    log_error "Aider not installed; run 'Install Aider' first"
+    pause
+    return 1
+  fi
+
+  if pgrep -f "aider" >/dev/null 2>&1; then
+    log_warn "Aider process already running"
+    pause
+    return 0
+  fi
+
+  # Try common serve commands; don't fail hard if unknown flags
+  nohup bash -c "aider server --port 3000" >/dev/null 2>&1 &
+  sleep 1
+  if pgrep -f "aider" >/dev/null 2>&1; then
+    log_success "Aider server started (background)"
+    log_info "Default port: 3000 (visit http://localhost:3000 if enabled)"
+  else
+    # Try alternate command
+    nohup bash -c "aider serve --port 3000" >/dev/null 2>&1 &
+    sleep 1
+    if pgrep -f "aider" >/dev/null 2>&1; then
+      log_success "Aider server started (background)"
+      log_info "Default port: 3000"
+    else
+      log_warn "Could not start Aider server automatically. Run 'aider server' manually and check docs."
+    fi
+  fi
+  pause
+}
+
+stop_aider() {
+  show_banner
+  log_step "Stopping Aider server"
+  echo
+  if ! pgrep -f "aider" >/dev/null 2>&1; then
+    log_warn "No running Aider process found"
+    pause
+    return 0
+  fi
+  pkill -f "aider" || true
+  sleep 1
+  log_success "Requested Aider processes to stop"
   pause
 }
 
@@ -1567,19 +1732,41 @@ ollama_quickstart() {
 
 start_runner() {
   show_banner
+  # Check for MCP runner-request and offer to apply it
+  if runner_req=$(mcp_consume_runner_request 2>/dev/null) && [[ -n "$runner_req" ]]; then
+    log_info "MCP runner-request detected: ${runner_req}"
+    read -r -p "Apply MCP request to start '${runner_req}'? [y/N]: " _mcp_apply
+    if [[ "${_mcp_apply}" =~ ^[Yy]$ ]]; then
+      case "$runner_req" in
+        ollama) choice=1 ;;
+        textgen) choice=2 ;;
+        cancel) echo "MCP request: cancel"; return 0 ;;
+        *) echo "Unknown MCP runner: ${runner_req}" ;;
+      esac
+      # If we set choice, skip the interactive prompt below
+      if [[ -n "${choice:-}" ]]; then
+        : # proceed to case handler
+      fi
+    fi
+  fi
   echo "Start AI Runner"
   echo "==========================================================="
   echo
-  echo "Which AI runner do you want to start?"
+  echo "Which AI runner do you want to stop?"
+  echo "==========================================================="
   echo
   echo "  1) Ollama"
-  echo "  2) LocalAI (container)"
-  echo "  3) llama.cpp (manual)"
-  echo "  4) text-generation-webui"
+  echo "  2) text-generation-webui"
   echo "  0) Cancel"
   echo
-  read -p "Select runner [0-4]: " -r choice
-  
+  read -p "Select runner [0-2]: " -r choice
+  # Publish start request via MCP for other components to observe
+  case "$choice" in
+    1) mcp_publish_runner_request "ollama" ;;
+    2) mcp_publish_runner_request "textgen" ;;
+    0) mcp_publish_runner_request "cancel" ;;
+    *) mcp_publish_runner_request "unknown" ;;
+  esac
   case "$choice" in
     1)
       if command -v ollama &>/dev/null; then
@@ -1593,22 +1780,6 @@ start_runner() {
       fi
       ;;
     2)
-      if [[ -z "$CONTAINER_CMD" ]]; then
-        log_error "No container runtime available"
-        pause
-        return 1
-      fi
-      log_info "Starting LocalAI container..."
-      mkdir -p "${PROJECT_ROOT}/localai-models"
-      $CONTAINER_CMD run -d \
-        --name localai \
-        -p 8080:8080 \
-        -v "${PROJECT_ROOT}/localai-models:/build/models:Z" \
-        quay.io/go-skynet/local-ai:latest-aio-cpu
-      log_success "LocalAI started"
-      log_info "Access at: http://localhost:8080"
-      ;;
-    3)
       if [[ -n "${LLAMA_CLI_BIN}" && -x "${LLAMA_CLI_BIN}" ]] || [[ -f "${LLAMACPP_DIR}/main" ]]; then
         # Prefer using built llama.cpp binaries if available
         if [[ -n "${LLAMA_SERVER_BIN}" && -x "${LLAMA_SERVER_BIN}" ]]; then
@@ -1635,7 +1806,8 @@ start_runner() {
         log_error "llama.cpp is not installed or not built"
       fi
       ;;
-    4)
+    
+    3)
       if [[ ! -d "$TEXTGEN_DIR" ]]; then
         log_error "text-generation-webui is not installed"
       else
@@ -1670,8 +1842,7 @@ stop_runner() {
   echo "Which AI runner do you want to stop?"
   echo
   echo "  1) Ollama"
-  echo "  2) LocalAI (container)"
-  echo "  3) text-generation-webui"
+  echo "  2) text-generation-webui"
   echo "  0) Cancel"
   echo
   read -p "Select runner [0-3]: " -r choice
@@ -1683,15 +1854,6 @@ stop_runner() {
       log_success "Ollama service stopped"
       ;;
     2)
-      if [[ -n "$CONTAINER_CMD" ]]; then
-        log_info "Stopping LocalAI container..."
-        $CONTAINER_CMD stop localai 2>/dev/null || log_warn "Container not running"
-        log_success "LocalAI stopped"
-      else
-        log_error "No container runtime available"
-      fi
-      ;;
-    3)
       log_info "Stopping text-generation-webui..."
       pkill -f "text-generation-webui" || log_warn "Process not found"
       log_success "text-generation-webui stopped"
@@ -1710,6 +1872,95 @@ stop_runner() {
 # ============================================================================
 # SYSTEM MONITORING AND HEALTH FUNCTIONS
 # ============================================================================
+
+# ---------------------------------------------------------------------------
+# Model Context Protocol (MCP) - simple file-based implementation
+# Components may publish/read JSON context objects to/from
+# ${PROJECT_ROOT}/mcp/contexts/<name>.json for lightweight interop.
+# ---------------------------------------------------------------------------
+
+mcp_init() {
+  mkdir -p "${PROJECT_ROOT}/mcp/contexts"
+}
+
+# Publish a JSON context under a stable name. Caller should provide a
+# valid JSON payload (no extra quoting) as second argument. Example:
+# mcp_publish_context "runner-request" '{"runner":"ollama","user":"alice"}'
+mcp_publish_context() {
+  local name="$1"
+  shift || true
+  local payload="$*"
+  mcp_init
+  local out_file="${PROJECT_ROOT}/mcp/contexts/${name}.json"
+
+  if command -v jq >/dev/null 2>&1; then
+    # If jq is present, wrap payload with timestamp cleanly
+    jq -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson p "${payload:-null}" '{timestamp:$ts,data:$p}' >"$out_file" 2>/dev/null || {
+      # fallback if payload isn't valid JSON for jq
+      cat >"$out_file" <<EOF
+{"timestamp":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","data":${payload:-null}}
+EOF
+    }
+  else
+    cat >"$out_file" <<EOF
+{"timestamp":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","data":${payload:-null}}
+EOF
+  fi
+
+  log_info "MCP: published ${out_file}"
+}
+
+# Read a published context to stdout
+mcp_read_context() {
+  local name="$1"
+  local file="${PROJECT_ROOT}/mcp/contexts/${name}.json"
+  if [[ -f "$file" ]]; then
+    cat "$file"
+    return 0
+  else
+    log_warn "MCP: context not found: $name"
+    return 1
+  fi
+}
+
+# Consume a runner-request context if present. Prints runner name to stdout and returns 0.
+mcp_consume_runner_request() {
+  local file="${PROJECT_ROOT}/mcp/contexts/runner-request.json"
+  if [[ ! -f "$file" ]]; then
+    return 1
+  fi
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '.runner // empty' "$file" 2>/dev/null || true
+  else
+    # Fallback: crude grep
+    grep -oP '"runner"\s*:\s*"\K[^"]+' "$file" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# List available contexts
+mcp_list_contexts() {
+  mcp_init
+  ls -1 "${PROJECT_ROOT}/mcp/contexts" 2>/dev/null || true
+}
+
+# Helper: publish a runner start request with metadata
+mcp_publish_runner_request() {
+  local runner_name="$1"
+  mcp_init
+  if command -v jq >/dev/null 2>&1; then
+    jq -n --arg runner "$runner_name" --arg user "${USER:-$(whoami)}" \
+      --arg host "${HOSTNAME:-$(hostname)}" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{runner:$runner,user:$user,host:$host,timestamp:$ts}' | \
+      tee "${PROJECT_ROOT}/mcp/contexts/runner-request.json" >/dev/null
+  else
+    cat >"${PROJECT_ROOT}/mcp/contexts/runner-request.json" <<EOF
+{"runner":"${runner_name}","user":"${USER:-$(whoami)}","host":"${HOSTNAME:-$(hostname)}","timestamp":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+EOF
+  fi
+  log_info "MCP: published runner-request (${runner_name})"
+}
+
 
 health_check_dashboard() {
   while true; do
@@ -1807,20 +2058,14 @@ health_check_dashboard() {
       printf "  %sNot installed%s Ollama: Not installed\n" "$RED" "$NC"
     fi
     
-    # LocalAI
-    # LocalAI: check container or listening port
-    if is_port_listening 8080 || pgrep -f localai >/dev/null 2>&1; then
-      printf "  %sOK%s LocalAI: Running (port 8080)\n" "$GREEN" "$NC"
-      if is_port_listening 8080; then
-        printf "    → http://localhost:8080\n"
+    # Aider
+    if command -v aider &>/dev/null; then
+      printf "  %sOK%s Aider: Installed\n" "$GREEN" "$NC"
+      if is_port_listening 3000; then
+        printf "    → http://localhost:3000\n"
       fi
     else
-      # try container images if container cmd present
-      if [[ -n "$CONTAINER_CMD" ]] && $CONTAINER_CMD images 2>/dev/null | grep -q "localai\|local-ai"; then
-        printf "  %sInstalled%s LocalAI: Installed, not running\n" "$YELLOW" "$NC"
-      else
-        printf "  %sNot installed%s LocalAI: Not installed\n" "$RED" "$NC"
-      fi
+      printf "  %sNot installed%s Aider: Not installed\n" "$RED" "$NC"
     fi
     
     # llama.cpp
@@ -1869,7 +2114,7 @@ health_check_dashboard() {
     echo "─────────────────────────────────────────────────────────"
     # Active ports - look for commonly used AI service ports
     local ports_found=0
-    for p in 11434 8080 7860 5000; do
+    for p in 11434 7860 5000; do
       if is_port_listening "$p"; then
         printf "  %s: Listening\n" "$p"
         ports_found=1
@@ -1956,18 +2201,14 @@ check_installed_runners() {
   fi
   echo
   
-  # Check LocalAI
-  if [[ -n "$CONTAINER_CMD" ]]; then
-    if $CONTAINER_CMD images | grep -q "local-ai"; then
-      log_success "LocalAI: Container image available"
-      echo "  Status: $($CONTAINER_CMD ps -a --filter name=localai --format '{{.Status}}' 2>/dev/null || echo 'not running')"
-    else
-      log_warn "LocalAI: Not installed"
-    fi
+  # Check Aider
+  if command -v aider &>/dev/null; then
+    log_success "Aider: Installed"
+    echo "  Location: $(command -v aider 2>/dev/null || echo 'unknown')"
   else
-    log_warn "LocalAI: Cannot check (no container runtime)"
+    echo
+    log_warn "Aider: Not installed"
   fi
-  echo
   
   # Check llama.cpp (prefer built binaries)
   if [[ -n "${LLAMA_CLI_BIN}" && -x "${LLAMA_CLI_BIN}" ]] || [[ -x "${LLAMA_SERVER_BIN}" ]] || [[ -f "${LLAMACPP_DIR}/main" ]]; then
@@ -2010,22 +2251,22 @@ interactive_model_selector() {
   echo "==========================================================="
   echo
   echo "Large Language Models:"
-  echo "  1) Llama 2 7B (4GB RAM)"
-  echo "  2) Llama 2 13B (8GB RAM)"
-  echo "  3) Mistral 7B (4GB RAM)"
-  echo "  4) Mixtral 8x7B (24GB RAM)"
-  echo "  5) CodeLlama 7B (4GB RAM)"
+  echo "  1) Llama 2 7B (4GB RAM)         — general-purpose assistant, chat and instruction tuning"
+  echo "  2) Llama 2 13B (8GB RAM)        — stronger reasoning and multi-turn dialogue than 7B"
+  echo "  3) Mistral 7B (4GB RAM)         — high-efficiency open-weight LLM for diverse tasks"
+  echo "  4) Mixtral 8x7B (24GB RAM)     — ensemble-style model for high-capacity generation"
+  echo "  5) CodeLlama 7B (4GB RAM)      — optimized for code understanding and generation"
   echo
   echo "Specialized Models:"
-  echo "  6) TinyLlama 1.1B (1GB RAM)"
-  echo "  7) Phi-2 2.7B (2GB RAM)"
-  echo "  8) Neural Chat 7B (4GB RAM)"
-  echo "  9) Orca Mini 3B (2GB RAM)"
-  echo "  10) Vicuna 7B (4GB RAM)"
+  echo "  6) TinyLlama 1.1B (1GB RAM)     — tiny conversational agent for low-resource devices"
+  echo "  7) Phi-2 2.7B (2GB RAM)         — compact model tuned for instruction following"
+  echo "  8) Neural Chat 7B (4GB RAM)     — chat-optimized model with safety/turn-taking tuning"
+  echo "  9) Orca Mini 3B (2GB RAM)       — lightweight assistant with solid reasoning for small hosts"
+  echo "  10) Vicuna 7B (4GB RAM)         — community-tuned chat model derived from LLaMA weights"
   echo
   echo "Vision Models:"
-  echo "  11) LLaVA 7B (5GB RAM)"
-  echo "  12) BakLLaVA 7B (5GB RAM)"
+  echo "  11) LLaVA 7B (5GB RAM)          — multimodal (image+text) reasoning and VQA"
+  echo "  12) BakLLaVA 7B (5GB RAM)       — vision-language variant optimized for image-grounded chat"
   echo
   echo "  0) Cancel"
   echo
@@ -2899,6 +3140,483 @@ remove_crawled_data_files() {
   pause
 }
 
+combine_crawled_data() {
+  show_banner
+  log_step "Combine Crawled Training Data"
+  echo
+
+  local training_dir="${PROJECT_ROOT}/data/training"
+  local out_file="${training_dir}/combined_training.txt"
+
+  if [[ ! -d "$training_dir" ]] || [[ -z "$(ls -A "$training_dir")" ]]; then
+    log_warn "No training data found in ${training_dir}"
+    pause
+    return 1
+  fi
+
+  log_info "Combining text files into: $out_file"
+  # Concatenate all .txt files, normalize newlines, and remove duplicate blank lines
+  awk 'BEGIN{RS=""; ORS="\n\n"} {gsub(/\r/,"",$0); print $0}' "${training_dir}"/*.txt > "$out_file" 2>/dev/null || {
+    log_error "Failed to combine files"
+    pause
+    return 1
+  }
+
+  # Remove duplicate consecutive empty lines
+  awk 'NF{print $0 RS}' "$out_file" > "${out_file}.tmp" && mv "${out_file}.tmp" "$out_file"
+
+  log_success "Combined training data saved to: $out_file"
+  pause
+}
+
+start_finetune() {
+  show_banner
+  log_step "Start Fine-tune (stub)"
+  echo
+
+  local training_dir="${PROJECT_ROOT}/data/training"
+  local combined="${training_dir}/combined_training.txt"
+
+  if [[ ! -f "$combined" ]]; then
+    log_warn "Combined training file not found. Run 'Combine Crawled Data' first."
+    pause
+    return 1
+  fi
+
+  echo "Fine-tune helper is a stub. Recommended next steps:"
+  echo "  - Review and clean: ${combined}"
+  echo "  - Convert to desired training format (JSONL for instruction tuning)"
+  echo "  - Use existing frameworks (Transformers/PEFT, LoRA, or text-generation-webui fine-tune)"
+  echo
+  read -p "Open README section on training steps? [y/N]: " -r reply
+  if [[ "$reply" =~ ^[Yy]$ ]]; then
+    if [[ -f "${PROJECT_ROOT}/README.md" ]]; then
+      ${EDITOR:-nano} "${PROJECT_ROOT}/README.md"
+    else
+      log_info "README.md not found"
+    fi
+  fi
+  pause
+}
+
+hf_model_search_wrapper() {
+  show_banner
+  log_step "Hugging Face Model Search"
+  echo
+
+  if [[ ! -f "${PROJECT_ROOT}/scripts/python/hf_model_search.py" ]]; then
+    log_error "hf_model_search.py not found in scripts/python"
+    pause
+    return 1
+  fi
+
+  echo "Launching interactive Hugging Face model search (top results by composite score)..."
+  echo "Press Ctrl-C to return to the menu."
+  python3 "${PROJECT_ROOT}/scripts/python/hf_model_search.py"
+  pause
+}
+
+# Simple spinner for long-running background jobs
+start_spinner() {
+  local _pid=$1
+  local _msg="$2"
+  local _delay=0.1
+  local _spinchars=("|" "/" "-" "\\")
+  echo -n "${_msg} "
+  while kill -0 "${_pid}" 2>/dev/null; do
+    for c in "${_spinchars[@]}"; do
+      printf "%s" "${c}"
+      sleep ${_delay}
+      printf "\b"
+    done
+  done
+  echo ""
+}
+
+# Run a command with retries and exponential backoff
+run_retry() {
+  local attempts=${1:-3}
+  shift
+  local delay=2
+  local i=1
+  local rc=0
+  while [[ $i -le $attempts ]]; do
+    "$@" && return 0
+    rc=$?
+    if [[ $i -lt $attempts ]]; then
+      sleep $delay
+      delay=$((delay * 2))
+    fi
+    i=$((i + 1))
+  done
+  return $rc
+}
+
+# Conversion queue management (limits concurrent conversions)
+CONVERSION_CONCURRENCY=${CONVERSION_CONCURRENCY:-2}
+CONV_PIDS=()
+conversion_reap() {
+  local new=()
+  for pid in "${CONV_PIDS[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      new+=("$pid")
+    else
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+  CONV_PIDS=("${new[@]}")
+}
+conversion_ensure_capacity() {
+  while (( ${#CONV_PIDS[@]} >= CONVERSION_CONCURRENCY )); do
+    if command -v wait >/dev/null 2>&1 && bash -c 'help wait' >/dev/null 2>&1; then
+      wait -n 2>/dev/null || true
+    else
+      sleep 1
+    fi
+    conversion_reap
+  done
+}
+conversion_enqueue() {
+  local cmd="$1"
+  conversion_ensure_capacity
+  bash -c "$cmd" &
+  CONV_PIDS+=("$!")
+}
+conversion_wait_all() {
+  for pid in "${CONV_PIDS[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+  CONV_PIDS=()
+}
+
+
+llm_search_noninteractive() {
+  # Usage: llm_search_noninteractive --keyword "foo" [--json] [--top N] [--sort composite|downloads|likes|likes_among_downloads] [--require-weights] [--gguf-only]
+  if [[ ! -f "${PROJECT_ROOT}/scripts/python/hf_model_search.py" ]]; then
+    log_error "hf_model_search.py not found in scripts/python"
+    return 1
+  fi
+
+  local keyword=""
+  local json_out=0
+  local topn=10
+  local sort="composite"
+  local req_weights=0
+  local gguf_only=0
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keyword|-k)
+        keyword="$2"; shift 2 || break ;;
+      --json)
+        json_out=1; shift ;;
+      --top)
+        topn="$2"; shift 2 || break ;;
+      --sort)
+        sort="$2"; shift 2 || break ;;
+      --require-weights)
+        req_weights=1; shift ;;
+      --gguf-only)
+        gguf_only=1; shift ;;
+      --help|-h)
+        echo "Usage: llm_search_noninteractive --keyword <kw> [--json] [--top N] [--sort composite|downloads|likes|likes_among_downloads] [--require-weights] [--gguf-only]";
+        return 0 ;;
+      *)
+        log_error "Unknown arg: $1"; return 1 ;;
+    esac
+  done
+
+  if [[ -z "$keyword" ]]; then
+    log_error "--keyword is required"; return 1
+  fi
+
+  args=("--name" "$keyword" "--top" "$topn" "--sort" "$sort")
+  if [[ $req_weights -eq 1 ]]; then args+=("--require-weights"); fi
+  if [[ $gguf_only -eq 1 ]]; then args+=("--gguf-only"); fi
+  if [[ $json_out -eq 1 ]]; then args+=("--json"); fi
+
+  python3 "${PROJECT_ROOT}/scripts/python/hf_model_search.py" "${args[@]}"
+}
+
+
+llm_search_menu() {
+  show_banner
+  log_step "LLM Search (Hugging Face)"
+  echo
+
+  if [[ ! -f "${PROJECT_ROOT}/scripts/python/hf_model_search.py" ]]; then
+    log_error "hf_model_search.py not found in scripts/python"
+    pause
+    return 1
+  fi
+
+  echo "Search by:"
+  echo "  1) Name keyword"
+  echo "  2) Tag keyword"
+  echo "  0) Back"
+  read -p "Choice [0-2]: " -r sch
+  case "$sch" in
+    0) return 0 ;;
+    1)
+      read -p "Enter name keyword: " -r kw
+      if [[ -z "$kw" ]]; then log_error "No keyword"; pause; return 1; fi
+      ;;
+    2)
+      read -p "Enter tag keyword: " -r kw
+      if [[ -z "$kw" ]]; then log_error "No tag"; pause; return 1; fi
+      ;;
+    *) log_error "Invalid"; pause; return 1 ;;
+  esac
+
+  echo
+  echo "Sort by:"
+  echo "  1) Likes among top downloads (preferred)"
+  echo "  2) Downloads"
+  echo "  3) Composite (balanced)"
+  read -p "Choice [1-3]: " -r s2
+  case "$s2" in
+    1) sort_arg="--sort likes_among_downloads" ;;
+    2) sort_arg="--sort downloads" ;;
+    3) sort_arg="--sort composite" ;;
+    *) sort_arg="--sort composite" ;;
+  esac
+
+  read -p "Require downloadable weights? [y/N]: " -r reqw
+  reqw_flag=""
+  if [[ "$reqw" =~ ^[Yy]$ ]]; then
+    reqw_flag="--require-weights"
+  fi
+
+  # Ask how many top results to show
+  read -p "How many top results to show? [10]: " -r topn
+  topn="${topn:-10}"
+  # Build python args
+  args=("--top" "$topn")
+  args+=("${sort_arg}")
+  if [[ -n "$reqw_flag" ]]; then args+=("${reqw_flag}"); fi
+
+  if [[ "$sch" -eq 1 ]]; then
+    args+=("--name" "$kw")
+  else
+    args+=("--tag" "$kw")
+  fi
+
+  echo "Running search..."
+  # Request JSON output so we can present an actionable menu
+  tmp_json="$(mktemp)"
+  python3 "${PROJECT_ROOT}/scripts/python/hf_model_search.py" "${args[@]}" --json > "$tmp_json" 2>/dev/null || {
+    log_error "Search failed or was interrupted"
+    rm -f "$tmp_json"
+    pause
+    return 1
+  }
+
+  # Present numbered list
+  echo
+  echo "Top results:"
+  python3 - <<PYTHON
+import json,sys
+data=json.load(open('$tmp_json'))
+for i,d in enumerate(data, start=1):
+    print(f"{i}) {d.get('repo_id')} — downloads:{d.get('downloads',0)} likes:{d.get('likes',0)} tags:{','.join(d.get('tags') or [])}")
+sys.exit(0)
+PYTHON
+
+  echo
+  read -p "Select number to act on (0 to cancel): " -r sel
+  if [[ -z "$sel" || "$sel" == "0" ]]; then
+    rm -f "$tmp_json"
+    pause
+    return 0
+  fi
+  if ! [[ "$sel" =~ ^[0-9]+$ ]]; then
+    log_error "Invalid selection"
+    rm -f "$tmp_json"
+    pause
+    return 1
+  fi
+
+  total=$(python3 - <<PYTHON
+import json
+data=json.load(open('$tmp_json'))
+print(len(data))
+PYTHON
+)
+  if (( sel < 1 || sel > total )); then
+    log_error "Selection out of range"
+    rm -f "$tmp_json"
+    pause
+    return 1
+  fi
+
+  # Get repo_id for selected index
+  repo_id=$(python3 - <<PYTHON
+import json,sys
+data=json.load(open('$tmp_json'))
+print(data[int(sys.argv[1]) - 1]['repo_id'])
+PYTHON
+  "$sel")
+
+  echo "Selected: $repo_id"
+  echo "Actions: 1) Inspect  2) Download weights  0) Cancel"
+  read -p "Action [0-2]: " -r act
+  case "$act" in
+    0)
+      rm -f "$tmp_json"
+      pause
+      return 0
+      ;;
+    1)
+      # Inspect using existing inspect mode
+      python3 "${PROJECT_ROOT}/scripts/python/hf_model_search.py" --inspect "$repo_id"
+      ;;
+    2)
+      # Ensure HF token available
+      if [[ -z "${HUGGINGFACE_HUB_TOKEN:-}" ]]; then
+        if [[ -f "$HOME/.huggingface/token" ]]; then
+          _hf_token=$(cat "$HOME/.huggingface/token" 2>/dev/null || true)
+          export HUGGINGFACE_HUB_TOKEN="${_hf_token}"
+        fi
+      fi
+      if [[ -z "${HUGGINGFACE_HUB_TOKEN:-}" ]]; then
+        echo
+        # If huggingface-cli available, offer to run interactive login
+        if command -v huggingface-cli &>/dev/null; then
+          read -p "No Hugging Face token found. Run 'huggingface-cli login' now? [Y/n]: " -r _runlogin
+          if [[ -z "$_runlogin" ]] || [[ "$_runlogin" =~ ^[Yy]$ ]]; then
+            huggingface-cli login || true
+            # try to pick up saved token
+            if [[ -f "$HOME/.huggingface/token" ]]; then
+              _hf_token=$(cat "$HOME/.huggingface/token" 2>/dev/null || true)
+              export HUGGINGFACE_HUB_TOKEN="${_hf_token}"
+            fi
+          fi
+        fi
+        if [[ -z "${HUGGINGFACE_HUB_TOKEN:-}" ]]; then
+          read -p "Paste token to use for download (leave empty to cancel): " -r _token
+          if [[ -z "$_token" ]]; then
+            log_error "No token provided; cannot download gated/private repos"
+            rm -f "$tmp_json"
+            pause
+            return 1
+          fi
+          export HUGGINGFACE_HUB_TOKEN="$_token"
+          # Offer to save token to ~/.huggingface/token
+          read -p "Save token to $HOME/.huggingface/token for future runs? [y/N]: " -r _save
+          if [[ "$_save" =~ ^[Yy]$ ]]; then
+            mkdir -p "$HOME/.huggingface"
+            printf "%s" "$_token" > "$HOME/.huggingface/token"
+            chmod 600 "$HOME/.huggingface/token"
+            log_info "Saved token to $HOME/.huggingface/token"
+          fi
+        fi
+      fi
+
+      # Perform download (prefer huggingface-cli, fallback to huggingface_hub python)
+      dest_dir="${PROJECT_ROOT}/data/models/${repo_id//\//_}"
+      mkdir -p "$dest_dir"
+      log_info "Downloading $repo_id to $dest_dir"
+      # run huggingface-cli or python downloader in background and show spinner
+      if command -v huggingface-cli &>/dev/null; then
+        (
+          HUGGINGFACE_HUB_TOKEN="${HUGGINGFACE_HUB_TOKEN}" huggingface-cli download "$repo_id" --local-dir "$dest_dir"
+        ) &
+        pid=$!
+        start_spinner $pid "Downloading"
+        wait $pid
+        r=$?
+        if [[ $r -ne 0 ]]; then
+          log_error "Download failed (huggingface-cli)"
+        else
+          log_success "Downloaded to: $dest_dir"
+        fi
+      else
+        # Use huggingface_hub python API as fallback (background)
+        python3 - <<'PY' &
+from huggingface_hub import hf_hub_download, list_repo_files
+import os,sys,json
+repo=sys.argv[1]
+outdir=sys.argv[2]
+os.makedirs(outdir, exist_ok=True)
+try:
+    # try to download a common filename or fallback to listing files
+    try:
+        fname=hf_hub_download(repo_id=repo, filename='pytorch_model.bin', cache_dir=outdir)
+        print(json.dumps({'ok':True,'file':fname}))
+    except Exception:
+        files=list_repo_files(repo_id=repo)
+        downloaded=[]
+        for f in files:
+            try:
+                p=hf_hub_download(repo_id=repo, filename=f, cache_dir=outdir)
+                downloaded.append(p)
+            except Exception:
+                continue
+        if downloaded:
+            print(json.dumps({'ok':True,'files':downloaded}))
+        else:
+            print(json.dumps({'ok':False,'error':'no-files-downloaded'}))
+except Exception as e:
+    print(json.dumps({'ok':False,'error':str(e)}))
+    sys.exit(2)
+PY
+        pid=$!
+        start_spinner $pid "Downloading"
+        wait $pid
+        r=$?
+        if [[ $r -ne 0 ]]; then
+          log_error "Python downloader failed; ensure huggingface_hub is installed and token is valid"
+        else
+          log_success "Downloaded to: $dest_dir"
+        fi
+      fi
+
+      # Offer conversion to GGUF
+      # Multi-format conversion options
+      if [[ -f "${PROJECT_ROOT}/scripts/third_party/llama.cpp/convert_hf_to_gguf.py" ]]; then
+        echo
+        echo "Convert downloaded model to GGUF formats:"
+        echo "  1) f16"
+        echo "  2) bf16"
+        echo "  3) f16 + bf16"
+        echo "  4) f16 + bf16 + q8_0"
+        echo "  5) f16 + bf16 + q8_0 + tq2_0 (all)"
+        echo "  0) Skip conversion"
+        read -p "Choose conversion preset [0]: " -r convc
+        convc="${convc:-0}"
+        formats=()
+        case "$convc" in
+          1) formats=(f16) ;;
+          2) formats=(bf16) ;;
+          3) formats=(f16 bf16) ;;
+          4) formats=(f16 bf16 q8_0) ;;
+          5) formats=(f16 bf16 q8_0 tq2_0) ;;
+          0) formats=() ;;
+          *) formats=() ;;
+        esac
+        for fmt in "${formats[@]}"; do
+          outname="$dest_dir/ggml-model-${fmt}.gguf"
+          log_info "Converting to ${fmt} -> ${outname}"
+          (python3 "${PROJECT_ROOT}/scripts/third_party/llama.cpp/convert_hf_to_gguf.py" "$dest_dir" --outfile "$outname" --outtype "$fmt") &
+          pid=$!
+          start_spinner $pid "Converting to ${fmt}"
+          if ! wait $pid; then
+            log_error "Conversion to ${fmt} failed"
+          else
+            log_success "Conversion to ${fmt} complete: ${outname}"
+          fi
+        done
+      else
+        log_warn "Conversion script not found: scripts/third_party/llama.cpp/convert_hf_to_gguf.py"
+      fi
+      ;;
+    *) log_error "Invalid action" ;;
+  esac
+
+  rm -f "$tmp_json"
+  pause
+}
+
 # ============================================================================
 # MAINTENANCE FUNCTIONS
 # ============================================================================
@@ -2937,7 +3655,6 @@ view_ai_runner_logs() {
   
   echo "Select runner to view logs:"
   echo "  1) Ollama (systemd)"
-  echo "  2) LocalAI (container)"
   echo "  0) Cancel"
   echo
   read -p "Select [0-2]: " -r choice
@@ -2946,14 +3663,6 @@ view_ai_runner_logs() {
     1)
       log_info "Ollama service logs:"
       journalctl -u ollama -n 50 --no-pager || log_error "Could not read logs"
-      ;;
-    2)
-      if [[ -n "$CONTAINER_CMD" ]]; then
-        log_info "LocalAI container logs:"
-        $CONTAINER_CMD logs localai --tail 50 || log_error "Could not read logs"
-      else
-        log_error "No container runtime available"
-      fi
       ;;
     0)
       log_info "Cancelled"
@@ -2988,7 +3697,7 @@ backup_project_data() {
     data/ config/ scripts/ 2>/dev/null || true
   
   if [[ -f "$backup_path" ]]; then
-    log_success "Backup created: $backup_path"
+    log_success "Backted: $backup_path"
     ls -lh "$backup_path"
   else
     log_error "Backup failed"
@@ -3115,9 +3824,9 @@ ai_runners_menu() {
     echo
     echo "  Installation:"
     echo "    1) Install Ollama"
-    echo "    2) Install LocalAI"
-    echo "    3) Install llama.cpp"
-    echo "    4) Install text-generation-webui"
+    echo "    2) Install llama.cpp"
+    echo "    3) Install text-generation-webui"
+    echo "    4) Install Aider (developer assistant)"
     echo
     echo "  Operation:"
     echo "    5) Start AI Runner"
@@ -3131,12 +3840,13 @@ ai_runners_menu() {
     echo "  0) Back to Main Menu"
     echo
     read -p "Select option [0-9]: " -r choice
+    log_debug "Main menu input: '${choice}'"
 
     case "$choice" in
       1) run_menu_action install_ollama ;;
-      2) run_menu_action install_localai ;;
-      3) run_menu_action install_llamacpp ;;
-      4) run_menu_action install_textgen_webui ;;
+      2) run_menu_action install_llamacpp ;;
+      3) run_menu_action install_textgen_webui ;;
+      4) run_menu_action install_aider ;;
       5) run_menu_action start_runner ;;
       6) run_menu_action stop_runner ;;
       7) run_menu_action quick_run ;;
@@ -3227,9 +3937,10 @@ downloads_menu() {
     echo "  3) Batch Download Setup Helper"
     echo "  4) Batch Download Models"
     echo "  5) Monitor Download Progress"
+    echo "  6) Search Hugging Face (dynamic top 10s)"
     echo "  0) Back to Models Menu"
     echo
-    read -p "Select option [0-5]: " -r choice
+    read -p "Select option [0-6]: " -r choice
 
     case "$choice" in
       1) run_menu_action interactive_model_selector ;;
@@ -3237,6 +3948,7 @@ downloads_menu() {
       3) run_menu_action setup_batch_download_helper ;;
       4) run_menu_action batch_download_models ;;
       5) run_menu_action monitor_batch_download ;;
+      6) run_menu_action hf_model_search_wrapper ;;
       0) return 0 ;;
       *) log_error "Invalid option" && sleep 1 ;;
     esac
@@ -3258,6 +3970,8 @@ crawler_menu() {
     echo "  3) Set Crawl Depth"
     echo "  4) View Crawled Data Files"
     echo "  5) Remove Crawled Data Files"
+    echo "  6) Combine Crawled Files into Dataset"
+    echo "  7) Start Fine-tune (helper)"
     echo "  0) Back to Main Menu"
     echo
     read -p "Select option [0-5]: " -r choice
@@ -3268,6 +3982,8 @@ crawler_menu() {
       3) run_menu_action set_crawl_depth ;;
       4) run_menu_action view_crawled_data_files ;;
       5) run_menu_action remove_crawled_data_files ;;
+      6) run_menu_action combine_crawled_data ;;
+      7) run_menu_action start_finetune ;;
       0) return 0 ;;
       *) log_error "Invalid option" && sleep 1 ;;
     esac
@@ -3338,6 +4054,176 @@ config_profiles_menu() {
   done
 }
 
+save_config_profile() {
+  show_banner
+  log_step "Save Current Config Profile"
+  echo
+
+  read -p "Profile name to save: " -r pname
+  if [[ -z "$pname" ]]; then
+    log_error "No profile name provided"
+    pause
+    return 1
+  fi
+
+  mkdir -p "${PROJECT_ROOT}/config/profiles"
+  ts=$(date +%Y%m%d_%H%M%S)
+  out="${PROJECT_ROOT}/config/profiles/${pname}_${ts}.tar.gz"
+  (cd "${PROJECT_ROOT}/config" && tar -czf "$out" .) || {
+    log_error "Failed to create profile archive"
+    pause
+    return 1
+  }
+
+  log_success "Saved profile: ${out}"
+  pause
+}
+
+list_config_profiles() {
+  show_banner
+  log_step "List Config Profiles"
+  echo
+  dir="${PROJECT_ROOT}/config/profiles"
+  if [[ ! -d "$dir" ]]; then
+    log_warn "No profiles directory found"
+    pause
+    return 0
+  fi
+  ls -lh "$dir"/*.tar.gz 2>/dev/null || echo "(no profiles)"
+  pause
+}
+
+load_config_profile() {
+  show_banner
+  log_step "Load Config Profile"
+  echo
+  dir="${PROJECT_ROOT}/config/profiles"
+  if [[ ! -d "$dir" ]] || [[ -z "$(ls -A "$dir")" ]]; then
+    log_warn "No saved profiles"
+    pause
+    return 1
+  fi
+
+  echo "Available profiles:"
+  select f in "$(ls -1 "$dir"/*.tar.gz 2>/dev/null)" "Cancel"; do
+    if [[ "$f" == "Cancel" || -z "$f" ]]; then
+      log_info "Cancelled"
+      pause
+      return 0
+    fi
+    if [[ -f "$f" ]]; then
+      # backup current config
+      bdir="${PROJECT_ROOT}/config/backups"
+      mkdir -p "$bdir"
+      bfile="$bdir/config_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
+      (cd "${PROJECT_ROOT}/config" && tar -czf "$bfile" .) || true
+      # extract profile into config
+      tar -xzf "$f" -C "${PROJECT_ROOT}/config" || {
+        log_error "Failed to extract profile"
+        pause
+        return 1
+      }
+      log_success "Profile loaded; previous config backed up to: $bfile"
+      pause
+      return 0
+    else
+      log_error "Invalid selection"
+      pause
+      return 1
+    fi
+  done
+}
+
+delete_config_profile() {
+  show_banner
+  log_step "Delete Config Profile"
+  echo
+  dir="${PROJECT_ROOT}/config/profiles"
+  if [[ ! -d "$dir" ]] || [[ -z "$(ls -A "$dir")" ]]; then
+    log_warn "No saved profiles"
+    pause
+    return 1
+  fi
+  echo "Available profiles:"
+  select f in "$(ls -1 "$dir"/*.tar.gz 2>/dev/null)" "Cancel"; do
+    if [[ "$f" == "Cancel" || -z "$f" ]]; then
+      log_info "Cancelled"
+      pause
+      return 0
+    fi
+    if [[ -f "$f" ]]; then
+      if rm -f "$f"; then
+        log_success "Deleted: $f"
+      else
+        log_error "Failed to delete $f"
+      fi
+      pause
+      return 0
+    else
+      log_error "Invalid selection"
+      pause
+      return 1
+    fi
+  done
+}
+
+export_settings() {
+  show_banner
+  log_step "Export Settings"
+  echo
+  outdir="${PROJECT_ROOT}/data/exports"
+  mkdir -p "$outdir"
+  outfile="$outdir/ollamatrauma_settings_$(date +%Y%m%d_%H%M%S).tar.gz"
+  # include config and vars
+  tar -czf "$outfile" -C "${PROJECT_ROOT}" config vars 2>/dev/null || tar -czf "$outfile" -C "${PROJECT_ROOT}" config 2>/dev/null || {
+    log_error "Failed to export settings"
+    pause
+    return 1
+  }
+  log_success "Exported settings to: $outfile"
+  pause
+}
+
+import_settings() {
+  show_banner
+  log_step "Import Settings"
+  echo
+  read -p "Path to export archive (or leave empty to choose from data/exports): " -r path
+  if [[ -z "$path" ]]; then
+    dir="${PROJECT_ROOT}/data/exports"
+    if [[ ! -d "$dir" ]]; then
+      log_warn "No exports directory found"
+      pause
+      return 1
+    fi
+    echo "Available exports:"
+    select f in "$(ls -1 "$dir"/*.tar.gz 2>/dev/null)" "Cancel"; do
+      if [[ "$f" == "Cancel" || -z "$f" ]]; then
+        log_info "Cancelled"
+        pause
+        return 0
+      fi
+      path="$f"
+      break
+    done
+  fi
+  if [[ ! -f "$path" ]]; then
+    log_error "Archive not found: $path"
+    pause
+    return 1
+  fi
+  # backup current config
+  mkdir -p "${PROJECT_ROOT}/config/backups"
+  (cd "${PROJECT_ROOT}/config" && tar -czf "${PROJECT_ROOT}/config/backups/pre_import_$(date +%Y%m%d_%H%M%S).tar.gz" .) || true
+  tar -xzf "$path" -C "${PROJECT_ROOT}" || {
+    log_error "Failed to extract archive"
+    pause
+    return 1
+  }
+  log_success "Imported settings from: $path"
+  pause
+}
+
 uninstall_submenu() {
   while true; do
     show_banner
@@ -3345,18 +4231,16 @@ uninstall_submenu() {
     echo "==========================================================="
     echo
     echo "  1) Uninstall Ollama"
-    echo "  2) Uninstall LocalAI"
-    echo "  3) Uninstall llama.cpp"
-    echo "  4) Uninstall text-generation-webui"
+    echo "  2) Uninstall llama.cpp"
+    echo "  3) Uninstall text-generation-webui"
     echo "  0) Back to AI Runners Management"
     echo
     read -p "Select option [0-4]: " -r choice
 
     case "$choice" in
       1) run_menu_action uninstall_ollama ;;
-      2) run_menu_action uninstall_localai ;;
-      3) run_menu_action uninstall_llamacpp ;;
-      4) run_menu_action uninstall_textgen_webui ;;
+      2) run_menu_action uninstall_llamacpp ;;
+      3) run_menu_action uninstall_textgen_webui ;;
       0) return 0 ;;
       *) log_error "Invalid option" && sleep 1 ;;
     esac
@@ -3371,6 +4255,31 @@ quick_run() {
   show_banner
   log_step "Quick Run (Auto-detect)..."
   echo
+
+  # Prefer local llama.cpp server if available (may be built with CUDA)
+  if [[ -n "${LLAMA_SERVER_BIN}" && -x "${LLAMA_SERVER_BIN}" ]]; then
+    log_info "llama.cpp server binary available: ${LLAMA_SERVER_BIN}"
+    echo
+    read -p "Start local llama.cpp server now? [y/N]: " -r reply
+    if [[ "$reply" =~ ^[Yy]$ ]]; then
+      read -p "Model path to serve (full path or leave empty to cancel): " -r modelpath
+      if [[ -z "$modelpath" ]]; then
+        log_info "No model path provided; cancelled"
+      else
+        read -p "Force CUDA (if available) when starting server? [y/N]: " -r force_cuda
+        if [[ "$force_cuda" =~ ^[Yy]$ ]] && [[ "${CUDA_AVAILABLE:-0}" -eq 1 ]]; then
+          log_info "Starting llama.cpp server with CUDA support"
+          log_step "Starting llama.cpp server: ${LLAMA_SERVER_BIN} --model ${modelpath} --use-cuda"
+          nohup "${LLAMA_SERVER_BIN}" --model "$modelpath" --use-cuda >/dev/null 2>&1 &
+        else
+          log_step "Starting llama.cpp server: ${LLAMA_SERVER_BIN} --model ${modelpath}"
+          nohup "${LLAMA_SERVER_BIN}" --model "$modelpath" >/dev/null 2>&1 &
+        fi
+        log_success "llama.cpp server started (background)"
+      fi
+      return
+    fi
+  fi
   
   # Detect and run installed AI runner
   if command -v ollama &>/dev/null; then
@@ -3384,24 +4293,22 @@ quick_run() {
     fi
   fi
   
-  if command -v localai &>/dev/null; then
-    log_info "LocalAI detected"
-    echo
-    read -p "Run default model with LocalAI? [y/N]: " -r reply
-    if [[ "$reply" =~ ^[Yy]$ ]]; then
-      log_step "Running model with LocalAI..."
-      localai run default || log_error "LocalAI run failed"
-      return
-    fi
-  fi
+  # Aider runtime support is manual: 'aider server' can be started by user
   
   if command -v docker &>/dev/null; then
     log_info "Docker detected"
     echo
     read -p "Run default container with Docker? [y/N]: " -r reply
     if [[ "$reply" =~ ^[Yy]$ ]]; then
+      read -p "Use GPU flags for container if available? [y/N]: " -r _use_gpu
+      extra_flags=()
+      extra_envs=()
+      if [[ "${_use_gpu}" =~ ^[Yy]$ ]] && [[ ${#CONTAINER_GPU_FLAGS_ARRAY[@]} -gt 0 ]]; then
+        extra_flags=("${CONTAINER_GPU_FLAGS_ARRAY[@]}")
+        extra_envs=("${CONTAINER_GPU_ENVS[@]:-}")
+      fi
       log_step "Running container with Docker..."
-      docker run --rm -it default || log_error "Docker run failed"
+      docker run "${extra_flags[@]:-}" "${extra_envs[@]:-}" --rm -it default || log_error "Docker run failed"
       return
     fi
   fi
@@ -3411,14 +4318,21 @@ quick_run() {
     echo
     read -p "Run default container with Podman? [y/N]: " -r reply
     if [[ "$reply" =~ ^[Yy]$ ]]; then
+      read -p "Use GPU flags for container if available? [y/N]: " -r _use_gpu
+      extra_flags=()
+      extra_envs=()
+      if [[ "${_use_gpu}" =~ ^[Yy]$ ]] && [[ ${#CONTAINER_GPU_FLAGS_ARRAY[@]} -gt 0 ]]; then
+        extra_flags=("${CONTAINER_GPU_FLAGS_ARRAY[@]}")
+        extra_envs=("${CONTAINER_GPU_ENVS[@]:-}")
+      fi
       log_step "Running container with Podman..."
-      podman run --rm -it default || log_error "Podman run failed"
+      podman run "${extra_flags[@]:-}" "${extra_envs[@]:-}" --rm -it default || log_error "Podman run failed"
       return
     fi
   fi
   
   log_warn "No compatible AI runner or container found"
-  echo "Please install Ollama, LocalAI, Docker, or Podman"
+  echo "Please install Ollama, Docker, or Podman"
   echo "Then, configure the runner in settings"
   pause
 }
@@ -3570,6 +4484,7 @@ setup_container_runtime() {
 # ============================================================================
 
 # Only one definition needed!
+# shellcheck disable=SC2317
 run_menu_action() {
   "$@" || log_error "Action '$*' failed"
 }
@@ -3601,8 +4516,105 @@ ensure_podman_rootless_ready
 # MENU ACTIONS HELPER FUNCTION
 # ==========================================================================
 
+## shellcheck disable=SC2317
 run_menu_action() {
   "$@" || log_error "Action '$*' failed"
+}
+
+# Simple chat interface wrapper (used by menu option 7)
+chat_interface() {
+  show_banner
+  log_step "Chat Interface"
+  echo
+
+  # Prefer Ollama, fallback to container runtimes
+  if command -v ollama &>/dev/null; then
+    log_info "Using Ollama for chat"
+    echo
+    ollama list 2>/dev/null || true
+    if [[ "${AUTO_MODE:-0}" -eq 1 ]]; then
+      model="${AUTO_MODEL:-codellama:7b-instruct}"
+      if [[ "${AUTO_STREAM:-0}" -eq 1 ]]; then
+        OLLAMA_STREAM_FLAG="--stream"
+      else
+        OLLAMA_STREAM_FLAG=""
+      fi
+      log_debug "chat_interface auto: model=${model} stream=${OLLAMA_STREAM_FLAG}"
+    else
+      read -p "Model to use (leave empty for default): " -r model
+      model=${model:-codellama:7b-instruct}
+      read -p "Stream responses if supported? [y/N]: " -r _stream
+      if [[ "${_stream}" =~ ^[Yy]$ ]]; then
+        OLLAMA_STREAM_FLAG="--stream"
+      else
+        OLLAMA_STREAM_FLAG=""
+      fi
+    fi
+    echo "Starting chat with model: $model"
+    echo "Type 'quit' or 'exit' to return to menu."
+
+    if [[ "${AUTO_MODE:-0}" -eq 1 && -n "${AUTO_MESSAGE}" ]]; then
+      echo "${AUTO_MESSAGE}" | ollama run "${model}" ${OLLAMA_STREAM_FLAG}
+      return
+    fi
+
+    while true; do
+      printf '\nYou: '
+      if ! IFS= read -r user_input; then
+        break
+      fi
+      [[ "$user_input" =~ ^(quit|exit)$ ]] && break
+      if [[ -z "$user_input" ]]; then
+        continue
+      fi
+      echo "$user_input" | ollama run "$model" ${OLLAMA_STREAM_FLAG}
+    done
+    return
+  fi
+
+  # Aider runtime support removed from automatic detection; continue to other backends
+
+  # Prefer llama.cpp server if available for local GPU usage
+  if [[ -n "${LLAMA_SERVER_BIN}" && -x "${LLAMA_SERVER_BIN}" ]]; then
+    log_info "Using local llama.cpp server for chat"
+    if [[ "${AUTO_MODE:-0}" -eq 1 ]]; then
+      modelpath="${AUTO_MODEL:-}"
+      use_cuda="${AUTO_USE_CUDA}"
+      if [[ "${use_cuda}" =~ ^[Yy]$ || "${use_cuda}" -eq 1 ]] && [[ "${CUDA_AVAILABLE:-0}" -eq 1 ]]; then
+        LLAMA_FLAGS=("--use-cuda")
+      else
+        LLAMA_FLAGS=()
+      fi
+      log_debug "chat_interface auto llama: modelpath=${modelpath} flags=${LLAMA_FLAGS[*]}"
+    else
+      read -p "Model path to connect to (or local file path): " -r modelpath
+      read -p "Use CUDA if available? [y/N]: " -r use_cuda
+      if [[ "$use_cuda" =~ ^[Yy]$ ]] && [[ "${CUDA_AVAILABLE:-0}" -eq 1 ]]; then
+        LLAMA_FLAGS=("--use-cuda")
+      else
+        LLAMA_FLAGS=()
+      fi
+    fi
+    echo "Type 'quit' or 'exit' to return to menu."
+    if [[ "${AUTO_MODE:-0}" -eq 1 && -n "${AUTO_MESSAGE}" ]]; then
+      echo "${AUTO_MESSAGE}" | "${LLAMA_CLI_BIN:-${LLAMA_SERVER_BIN}}" --model "${modelpath}" "${LLAMA_FLAGS[@]}" || log_error "llama.cpp run failed"
+      return
+    fi
+
+    while true; do
+      printf '\nYou: '
+      if ! IFS= read -r user_input; then
+        break
+      fi
+      [[ "$user_input" =~ ^(quit|exit)$ ]] && break
+      [[ -z "$user_input" ]] && continue
+      echo "$user_input" | "${LLAMA_CLI_BIN:-${LLAMA_SERVER_BIN}}" --model "$modelpath" "${LLAMA_FLAGS[@]}" || log_error "llama.cpp run failed"
+    done
+    return
+  fi
+
+  log_warn "No chat-capable runner detected. Install Ollama or build llama.cpp to use chat."
+  pause
 }
 
 # MAIN MENU
@@ -3621,9 +4633,16 @@ main_menu() {
     echo "  5) Maintenance & Logs"
     echo "  6) Health Dashboard"
     echo "  7) Chat Interface"
+    echo "  8) Training (Crawl & Prepare Data)"
     echo "  0) Exit"
     echo
-    read -p "Select option [0-9]: " -r choice
+    # If running in AUTO_MODE with a choice, use it and don't prompt
+    if [[ "${AUTO_MODE:-0}" -eq 1 && -n "${AUTO_CHOICE}" ]]; then
+      choice="${AUTO_CHOICE}"
+      log_debug "Main menu input (auto): '${choice}'"
+    else
+    read -p "Select option [0-8]: " -r choice
+    fi
 
     case "$choice" in
       1) run_menu_action ollama_quickstart ;;
@@ -3633,6 +4652,7 @@ main_menu() {
       5) run_menu_action maintenance_menu ;;
       6) run_menu_action health_check_dashboard ;;
       7) run_menu_action chat_interface ;;
+      8) run_menu_action crawler_menu ;;
       0)
         clear_screen
         log_success "Thank you for using OllamaTrauma v2!"
@@ -3643,6 +4663,12 @@ main_menu() {
         sleep 1
         ;;
     esac
+
+    # If auto mode invoked a single choice, exit after one iteration
+    if [[ "${AUTO_MODE:-0}" -eq 1 ]]; then
+      log_debug "Auto mode run complete; exiting main menu"
+      return 0
+    fi
   done
 }
 
@@ -3650,29 +4676,76 @@ main_menu() {
 # SCRIPT START
 # ============================================================================
 
-# Parse command line arguments
-case "${1:-}" in
-  --debug)
-    export DEBUG=1
-    debug_mode
-    exit 0
-    ;;
-  --help|-h)
-    echo "================================================================="
-    echo "  OllamaTrauma v2.1.0 - AI Runner Manager"
-    echo "================================================================="
-    echo
-    echo "Usage: $0 [OPTION]"
-    echo
-    echo "Options:"
-    echo "  --debug       Run comprehensive debug mode to test all functions"
-    echo "  --help, -h    Show this help message"
-    echo
-    echo "Run without options for interactive menu."
-    echo
-    exit 0
-    ;;
-esac
+# Parse command line arguments (support --auto/CI mode)
+# shellcheck disable=SC2034
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --debug)
+      export DEBUG=1
+      debug_mode
+      exit 0
+      ;;
+    --help|-h)
+      echo "================================================================="
+      echo "  OllamaTrauma v2.1.0 - AI Runner Manager"
+      echo "================================================================="
+      echo
+      echo "Usage: $0 [OPTION]"
+      echo
+      echo "Options:"
+      echo "  --debug             Run comprehensive debug mode to test all functions"
+      echo "  --help, -h          Show this help message"
+      echo "  --auto              Enable non-interactive automation mode"
+      echo "  --auto-choice N     Select main menu choice N and run once"
+      echo "  --auto-chat-mode X  Preferred chat backend: ollama|llama"
+      echo "  --auto-use-gpu      Force GPU flags for containers"
+      echo "  --auto-use-cuda     Ask llama.cpp to use CUDA (if available)"
+      echo "  --auto-stream       Stream responses when supported"
+      echo "  --auto-model NAME   Model name/path to use for chat"
+      echo "  --auto-message MSG  Send a single message and exit"
+      echo
+      echo "Run without options for interactive menu."
+      echo
+      exit 0
+      ;;
+    --auto)
+      AUTO_MODE=1
+      shift
+      ;;
+    --auto-choice)
+      AUTO_CHOICE="$2"
+      shift 2
+      ;;
+    --auto-chat-mode)
+      AUTO_CHAT_MODE="$2"
+      shift 2
+      ;;
+    --auto-use-gpu)
+      AUTO_USE_GPU=1
+      shift
+      ;;
+    --auto-use-cuda)
+      AUTO_USE_CUDA=1
+      shift
+      ;;
+    --auto-stream)
+      AUTO_STREAM=1
+      shift
+      ;;
+    --auto-model)
+      AUTO_MODEL="$2"
+      shift 2
+      ;;
+    --auto-message)
+      AUTO_MESSAGE="$2"
+      shift 2
+      ;;
+    *)
+      # Unknown; stop parsing and allow positional args if needed
+      break
+      ;;
+  esac
+done
 
 # Ensure log directory exists
 mkdir -p "$LOG_DIR" 2>/dev/null || {
@@ -3696,6 +4769,8 @@ acquire_lock
 
 # Detect container runtime (Podman preferred)
 detect_container_runtime
+# Populate container GPU flags (Docker/Podman)
+detect_container_gpu_flags
 
 # Show main menu
 main_menu

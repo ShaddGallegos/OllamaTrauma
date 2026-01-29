@@ -378,7 +378,6 @@ def main():
     # Attempt to handle a couple of potential prompts gracefully
     for prompt in [
         r"Run default model with Ollama\? \[y/N\]:",
-        r"Run default model with LocalAI\? \[y/N\]:",
         r"Run default container with Docker\? \[y/N\]:",
         r"Run default container with Podman\? \[y/N\]:",
         r"Press Enter to continue\.\.\.",
