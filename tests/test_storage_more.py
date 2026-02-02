@@ -4,7 +4,9 @@ import shutil
 
 
 def load_mod():
-    spec = importlib.util.spec_from_file_location('sorg', '/run/media/sgallego/SD_Card/Storage_Organize_v2.py')
+    # Prefer the repository-local helper implementation for test determinism
+    repo_root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location('sorg', str(repo_root / 'scripts' / 'storage_organize.py'))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
