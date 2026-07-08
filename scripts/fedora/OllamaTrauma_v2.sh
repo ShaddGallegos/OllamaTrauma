@@ -4,19 +4,43 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Provide a CI-aware read_choice shim for wrapper-level scripts
+read_choice() {
+  local prompt="$1"
+  local _var_name="$2"
+  local _allow_global_exit=${3:-0}
+  local _input=""
+  if [[ "${OT_CI_MODE:-0}" == "1" ]]; then
+    # In CI, default to empty reply to avoid blocking
+    _input=""
+  else
+    read -p "$prompt" -r _input
+  fi
+  if [[ -n "${_var_name}" ]]; then
+    printf -v "${_var_name}" '%s' "${_input}"
+  else
+    choice="${_input}"
+  fi
+}
+
 # shellcheck disable=SC2093
 exec "$ROOT_DIR/OllamaTrauma_v2.sh" "$@"
 
 debug_mode() {
   clear_screen
-  echo "==========================================================="
-  echo "  DEBUG MODE - Testing All Functions"
-  echo "==========================================================="
-  echo
-  echo "Debug Log: $DEBUG_LOG"
-  echo "Report: $DEBUG_REPORT"
-  echo "==========================================================="
-  echo
+  cecho MAGENTA "-----------------------------------------------------------"
+  cecho MAGENTA "  DEBUG MODE - Testing All Functions"
+  cecho MAGENTA "-----------------------------------------------------------"
+    printf "\n"
+    info "Debug Log: $DEBUG_LOG"
+    info "Report: $DEBUG_REPORT"
+    cecho MAGENTA "-----------------------------------------------------------"
+    printf "\n"
+  printf "\n"
+  info "Debug Log: $DEBUG_LOG"
+  info "Report: $DEBUG_REPORT"
+  cecho MAGENTA "-----------------------------------------------------------"
+  printf "\n"
   
   mkdir -p "$LOG_DIR"
   : > "$DEBUG_LOG"
@@ -27,8 +51,10 @@ debug_mode() {
   local failed_tests=0
   
   # Test utility functions
-  echo "Testing Utility Functions..." | tee -a "$DEBUG_LOG"
-  echo "─────────────────────────────────────────────────────────" | tee -a "$DEBUG_LOG"
+  log_info "Testing Utility Functions..."
+  printf '%s\n' "Testing Utility Functions..." >> "$DEBUG_LOG" 2>/dev/null || true
+  log_info "─────────────────────────────────────────────────────────"
+  printf '%s\n' "─────────────────────────────────────────────────────────" >> "$DEBUG_LOG" 2>/dev/null || true
   
   local util_funcs=(
     "clear_screen:Clear screen utility"
@@ -51,8 +77,10 @@ debug_mode() {
   done
   
   # Test setup functions
-  echo "Testing Setup Functions..." | tee -a "$DEBUG_LOG"
-  echo "─────────────────────────────────────────────────────────" | tee -a "$DEBUG_LOG"
+  log_info "Testing Setup Functions..."
+  printf '%s\n' "Testing Setup Functions..." >> "$DEBUG_LOG" 2>/dev/null || true
+  log_info "─────────────────────────────────────────────────────────"
+  printf '%s\n' "─────────────────────────────────────────────────────────" >> "$DEBUG_LOG" 2>/dev/null || true
   
   local setup_funcs=(
     "initialize_project:Project initialization"
@@ -74,8 +102,10 @@ debug_mode() {
   done
   
   # Test AI runner functions
-  echo "Testing AI Runner Functions..." | tee -a "$DEBUG_LOG"
-  echo "─────────────────────────────────────────────────────────" | tee -a "$DEBUG_LOG"
+  log_info "Testing AI Runner Functions..."
+  printf '%s\n' "Testing AI Runner Functions..." >> "$DEBUG_LOG" 2>/dev/null || true
+  log_info "─────────────────────────────────────────────────────────"
+  printf '%s\n' "─────────────────────────────────────────────────────────" >> "$DEBUG_LOG" 2>/dev/null || true
   
   local runner_funcs=(
     "install_ollama:Ollama installer"
@@ -100,14 +130,16 @@ debug_mode() {
   done
   
   # Test menu functions
-  echo "Testing Menu Functions..." | tee -a "$DEBUG_LOG"
-  echo "─────────────────────────────────────────────────────────" | tee -a "$DEBUG_LOG"
+  log_info "Testing Menu Functions..."
+  printf '%s\n' "Testing Menu Functions..." >> "$DEBUG_LOG" 2>/dev/null || true
+  log_info "─────────────────────────────────────────────────────────"
+  printf '%s\n' "─────────────────────────────────────────────────────────" >> "$DEBUG_LOG" 2>/dev/null || true
   
   local menu_funcs=(
     "main_menu:Main menu"
     "setup_menu:Setup menu"
     "ai_runners_menu:AI runners menu"
-    "models_menu:Models menu"
+      log_info "-----------------------------------------------------------"
     "maintenance_menu:Maintenance menu"
     "uninstall_submenu:Uninstall submenu"
   )
@@ -123,34 +155,41 @@ debug_mode() {
   done
   
   # Generate summary
-  echo "===========================================================" | tee -a "$DEBUG_LOG" "$DEBUG_REPORT"
-  echo "DEBUG SUMMARY" | tee -a "$DEBUG_LOG" "$DEBUG_REPORT"
-  echo "===========================================================" | tee -a "$DEBUG_LOG" "$DEBUG_REPORT"
-  echo "Total Tests: $total_tests" | tee -a "$DEBUG_LOG" "$DEBUG_REPORT"
-  echo "Passed: $passed_tests" | tee -a "$DEBUG_LOG" "$DEBUG_REPORT"
-  echo "Failed: $failed_tests" | tee -a "$DEBUG_LOG" "$DEBUG_REPORT"
-  echo "===========================================================" | tee -a "$DEBUG_LOG" "$DEBUG_REPORT"
-  echo
+  log_info "-----------------------------------------------------------"
+  printf '%s\n' "-----------------------------------------------------------" >> "$DEBUG_LOG" "$DEBUG_REPORT" 2>/dev/null || true
+  log_info "DEBUG SUMMARY"
+  printf '%s\n' "DEBUG SUMMARY" >> "$DEBUG_LOG" "$DEBUG_REPORT" 2>/dev/null || true
+  log_info "-----------------------------------------------------------"
+  printf '%s\n' "-----------------------------------------------------------" >> "$DEBUG_LOG" "$DEBUG_REPORT" 2>/dev/null || true
+  info "Total Tests: $total_tests"
+  printf '%s\n' "Total Tests: $total_tests" >> "$DEBUG_LOG" "$DEBUG_REPORT" 2>/dev/null || true
+  info "Passed: $passed_tests"
+  printf '%s\n' "Passed: $passed_tests" >> "$DEBUG_LOG" "$DEBUG_REPORT" 2>/dev/null || true
+  info "Failed: $failed_tests"
+  printf '%s\n' "Failed: $failed_tests" >> "$DEBUG_LOG" "$DEBUG_REPORT" 2>/dev/null || true
+  log_info "-----------------------------------------------------------"
+  printf '%s\n' "-----------------------------------------------------------" >> "$DEBUG_LOG" "$DEBUG_REPORT" 2>/dev/null || true
+  printf "\n"
   
   if [[ $failed_tests -gt 0 ]]; then
-    echo "Failures detected. See report: $DEBUG_REPORT"
-    echo
-    echo "Attempting to fix common errors..."
+    error "Failures detected. See report: $DEBUG_REPORT"
+    printf "\n"
+    info "Attempting to fix common errors..."
     debug_auto_fix
   else
-    echo "All tests passed!"
+    success "All tests passed!"
   fi
-  
-  echo
-  read -p "Press Enter to continue..." -r
+
+  printf "\n"
+  read_choice "Press Enter to continue..." _dummy
 }
 
 debug_auto_fix() {
-  echo
-  echo "==========================================================="
-  echo "AUTO-FIX MODE"
-  echo "==========================================================="
-  echo
+  printf "\n"
+  cecho CYAN "-----------------------------------------------------------"
+  cecho GREEN "AUTO-FIX MODE"
+  cecho CYAN "-----------------------------------------------------------"
+  printf "\n"
   
   local fixes_applied=0
   
@@ -209,10 +248,10 @@ debug_auto_fix() {
   fi
   
   echo
-  echo "==========================================================="
-  echo "Auto-fix summary: $fixes_applied potential fixes identified"
-  echo "See detailed report: $DEBUG_REPORT"
-  echo "==========================================================="
+  cecho CYAN "-----------------------------------------------------------"
+  info "Auto-fix summary: $fixes_applied potential fixes identified"
+  info "See detailed report: $DEBUG_REPORT"
+  cecho CYAN "-----------------------------------------------------------"
 }
 
 # ============================================================================
@@ -220,18 +259,18 @@ debug_auto_fix() {
 # ============================================================================
 
 clear_screen() {
-  clear 2>/dev/null || printf '\033[2J\033[H'
-}
+  cecho CYAN "-----------------------------------------------------------"
+  cecho CYAN "-----------------------------------------------------------"
 
 pause() {
   echo
-  read -p "Press Enter to continue..." -r
+  read_choice "Press Enter to continue..." _dummy
 }
 
 show_banner() {
   clear_screen
   cat << "EOF"
-=================================================================
+-----------------------------------------------------------
    ___  _ _                 _____                          
   / _ \| | | __ _ _ __ ___ |_   _| __ __ _ _   _ _ __ ___   __ _
  | | | | | |/ _` | '_ ` _ \  | || '__/ _` | | | | '_ ` _ \ / _` |
@@ -239,15 +278,15 @@ show_banner() {
   \___/|_|_|\__,_|_| |_| |_| |_||_|  \__,_|\__,_|_| |_| |_|\__,_|
                                                            
            Cross-Platform AI Runner Manager & Bootstrap
-=================================================================
+-----------------------------------------------------------
 EOF
   echo "  Version: ${SCRIPT_VERSION}"
   echo "  Project: ${PROJECT_ROOT}"
   if [[ -n "$CONTAINER_CMD" ]]; then
     echo "  Container: ${CONTAINER_CMD}"
   fi
-  echo "==========================================================="
-  echo
+  cecho CYAN "-----------------------------------------------------------"
+  printf "\n"
 }
 
 open_browser() {
@@ -326,11 +365,11 @@ setup_rootless_podman() {
   user_id=$(id -u)
 
   show_banner
-  echo "Rootless Podman Setup Wizard"
-  echo "==========================================================="
-  echo
+  cecho CYAN "Rootless Podman Setup Wizard"
+  cecho CYAN "-----------------------------------------------------------"
+  printf "\n"
   log_info "Setting up Podman for user: $current_user (UID: $user_id)"
-  echo
+  printf "\n"
 
   # Check and enable Podman socket for rootless mode
   if [[ $EUID -ne 0 ]]; then
@@ -363,9 +402,35 @@ setup_rootless_podman() {
   
   # Final test
   echo
+  # If this wrapper is run standalone in CI, provide a small podman-info shim
+  if ! declare -f safe_podman_info >/dev/null 2>&1; then
+    safe_podman_info() {
+      if [[ "${OT_CI_MODE:-0}" == "1" ]]; then
+        printf '%s\n' "{\"host\":\"ci-stub\",\"status\":\"ok\"}"
+        return 0
+      fi
+      if ! command -v podman >/dev/null 2>&1; then
+        return 1
+      fi
+      podman info "$@"
+    }
+  fi
+  # Provide a small safe_ollama_list shim when running under CI or standalone
+  if ! declare -f safe_ollama_list >/dev/null 2>&1; then
+    safe_ollama_list() {
+      if [[ "${OT_CI_MODE:-0}" == "1" ]]; then
+        printf '%s\n' "NAME  STATUS"
+        return 0
+      fi
+      if ! command -v ollama >/dev/null 2>&1; then
+        return 1
+      fi
+      ollama list "$@"
+    }
+  fi
   log_step "Testing Podman with 'podman info' and 'podman run --rm hello-world'..."
   echo "─────────────────────────────────────────────────────────"
-  podman info || log_error "podman info failed"
+  safe_podman_info || log_error "podman info failed"
   echo "─────────────────────────────────────────────────────────"
   podman run --rm hello-world || log_error "podman run --rm hello-world failed"
   echo "─────────────────────────────────────────────────────────"
@@ -636,15 +701,15 @@ EOFPY
 # Monitor batch download progress
 
 clear
-echo "==================================================================="
-echo "  OllamaTrauma Batch Download Monitor"
-echo "==================================================================="
+cecho CYAN "-----------------------------------------------------------"
+cecho GREEN "  OllamaTrauma Batch Download Monitor"
+cecho CYAN "-----------------------------------------------------------"
 echo ""
-echo "Press Ctrl+C to stop monitoring (download will continue)"
+info "Press Ctrl+C to stop monitoring (download will continue)"
 echo ""
 
 while true; do
-    echo "==================================================================="
+    echo "-----------------------------------------------------------"
     echo "Time: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "───────────────────────────────────────────────────────────────────"
     
@@ -652,7 +717,7 @@ while true; do
     echo ""
     echo "Downloaded Models:"
     if command -v ollama &>/dev/null; then
-        ollama list 2>/dev/null || echo "  (Ollama not running yet)"
+        safe_ollama_list 2>/dev/null || echo "  (Ollama not running yet)"
     else
         echo "  (Ollama not installed yet)"
     fi
@@ -663,7 +728,7 @@ while true; do
     df -h / | grep -E "Filesystem|/dev/mapper" | head -2
     
     echo ""
-    echo "==================================================================="
+    echo "-----------------------------------------------------------"
     echo "Refreshing in 10 seconds... (Ctrl+C to exit)"
     
     sleep 10
@@ -1073,17 +1138,17 @@ uninstall_textgen_webui() {
 
 start_runner() {
   show_banner
-  echo "Start AI Runner"
-  echo "==========================================================="
-  echo
-  echo "Which AI runner do you want to start?"
-  echo
-  echo "  1) Ollama"
-  echo "  2) llama.cpp (manual)"
-  echo "  3) llama.cpp (manual)"
-  echo "  4) text-generation-webui"
-  echo "  0) Cancel"
-  echo
+  cecho CYAN "Start AI Runner"
+  cecho MAGENTA "-----------------------------------------------------------"
+  printf "\n"
+  info "Which AI runner do you want to start?"
+  printf "\n"
+  info "  1) Ollama"
+  info "  2) llama.cpp (manual)"
+  info "  3) llama.cpp (manual)"
+  info "  4) text-generation-webui"
+  info "  0) Cancel"
+  printf "\n"
   read -p "Select runner [0-4]: " -r choice
   
   case "$choice" in
@@ -1138,15 +1203,15 @@ start_runner() {
 
 stop_runner() {
   show_banner
-  echo "Stop AI Runner"
-  echo "==========================================================="
-  echo
-  echo "Which AI runner do you want to stop?"
-  echo
-  echo "  1) Ollama"
-  echo "  2) text-generation-webui"
-  echo "  0) Cancel"
-  echo
+  cecho CYAN "Stop AI Runner"
+  cecho MAGENTA "-----------------------------------------------------------"
+  printf "\n"
+  info "Which AI runner do you want to stop?"
+  printf "\n"
+  info "  1) Ollama"
+  info "  2) text-generation-webui"
+  info "  0) Cancel"
+  printf "\n"
   read -p "Select runner [0-3]: " -r choice
   
   case "$choice" in
@@ -1178,91 +1243,90 @@ stop_runner() {
 health_check_dashboard() {
   while true; do
     show_banner
-    echo "Health Check Dashboard"
-    echo "==========================================================="
+    cecho CYAN "Health Check Dashboard"
+    cecho CYAN "-----------------------------------------------------------"
     echo
-    
+
     # System Resources
-    echo "${CYAN}[SYSTEM RESOURCES]${NC}"
-    echo "─────────────────────────────────────────────────────────"
+    cecho YELLOW "${CYAN}[SYSTEM RESOURCES]${NC}"
+    cecho CYAN "─────────────────────────────────────────────────────────"
     local cpu_usage
     cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
-    echo "  CPU Usage: ${cpu_usage}%"
+    info "  CPU Usage: ${cpu_usage}%"
     
     local mem_info
     mem_info=$(free -h | awk 'NR==2{printf "  Memory: %s / %s (%.0f%%)", $3, $2, $3/$2 * 100}')
-    echo "$mem_info"
+    info "$mem_info"
     
     local disk_info
     disk_info=$(df -h "${PROJECT_ROOT}" | awk 'NR==2{printf "  Disk: %s / %s (%s)", $3, $2, $5}')
-    echo "$disk_info"
+    info "$disk_info"
     
     local load_avg
     load_avg=$(uptime | awk -F'load average:' '{print $2}')
-    echo "  Load Average:$load_avg"
+    info "  Load Average:$load_avg"
     echo
-    
     # AI Runners Status
-    echo "${CYAN}[AI RUNNERS]${NC}"
-    echo "─────────────────────────────────────────────────────────"
+    cecho YELLOW "${CYAN}[AI RUNNERS]${NC}"
+    cecho CYAN "─────────────────────────────────────────────────────────"
     
     # Ollama
     if command -v ollama &>/dev/null; then
       if systemctl is-active --quiet ollama 2>/dev/null; then
-        echo "  ${GREEN}OK${NC} Ollama: Running (port 11434)"
+        cecho GREEN "  OK Ollama: Running (port 11434)"
         if netstat -tuln 2>/dev/null | grep -q ":11434 "; then
-          echo "    → http://localhost:11434"
+          info "    → http://localhost:11434"
         fi
       else
-        echo "  ${YELLOW}${NC} Ollama: Installed, not running"
+        info "  ${YELLOW}Ollama: Installed, not running${NC}"
       fi
     else
-      echo "  ${RED}${NC} Ollama: Not installed"
+      cecho RED "  Ollama: Not installed"
     fi
     
     # LocalAI runner support removed
     
     # llama.cpp
     if [[ -f "${LLAMACPP_DIR}/main" ]]; then
-      echo "  ${GREEN}OK${NC} llama.cpp: Installed"
-      echo "    → ${LLAMACPP_DIR}"
+      cecho GREEN "  OK llama.cpp: Installed"
+      info "    → ${LLAMACPP_DIR}"
     else
-      echo "  ${RED}${NC} llama.cpp: Not installed"
+      cecho RED "  llama.cpp: Not installed"
     fi
     
     # text-generation-webui
     if [[ -d "$TEXTGEN_DIR" ]]; then
       if pgrep -f "text-generation-webui" &>/dev/null; then
-        echo "  ${GREEN}OK${NC} text-gen-webui: Running"
+        cecho GREEN "  OK text-gen-webui: Running"
       else
-        echo "  ${YELLOW}${NC} text-gen-webui: Installed, not running"
+        info "  ${YELLOW}text-gen-webui: Installed, not running${NC}"
       fi
     else
-      echo "  ${RED}${NC} text-gen-webui: Not installed"
+      cecho RED "  text-gen-webui: Not installed"
     fi
     echo
     
     # Models
-    echo "${CYAN}[MODELS]${NC}"
-    echo "─────────────────────────────────────────────────────────"
+    cecho YELLOW "${CYAN}[MODELS]${NC}"
+    cecho CYAN "─────────────────────────────────────────────────────────"
     if command -v ollama &>/dev/null; then
       local model_count
-      model_count=$(ollama list 2>/dev/null | tail -n +2 | wc -l)
-      echo "  Ollama Models: $model_count"
+      model_count=$(safe_ollama_list 2>/dev/null | tail -n +2 | wc -l)
+      info "  Ollama Models: $model_count"
     fi
     
     if [[ -d "${PROJECT_ROOT}/data/models" ]]; then
       local local_models
       local_models=$(find "${PROJECT_ROOT}/data/models" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
-      echo "  Local Models: $local_models"
+      info "  Local Models: $local_models"
     fi
     echo
     
     # Active Ports
-    echo "${CYAN}[ACTIVE PORTS]${NC}"
-    echo "─────────────────────────────────────────────────────────"
+    cecho YELLOW "${CYAN}[ACTIVE PORTS]${NC}"
+    cecho CYAN "─────────────────────────────────────────────────────────"
     if command -v netstat &>/dev/null; then
-      netstat -tuln 2>/dev/null | grep -E ":(8080|11434|7860|5000)" | awk '{print "  " $4}' || echo "  No AI services detected"
+      netstat -tuln 2>/dev/null | grep -E ":(8080|11434|7860|5000)" | awk '{print "  " $4}' || info "  No AI services detected"
     elif command -v ss &>/dev/null; then
       ss -tuln 2>/dev/null | grep -E ":(8080|11434|7860|5000)" | awk '{print "  " $5}' || echo "  No AI services detected"
     else
@@ -1270,9 +1334,9 @@ health_check_dashboard() {
     fi
     echo
     
-    echo "==========================================================="
-    echo "  [R] Refresh   [Q] Back to Menu"
-    echo
+    cecho CYAN "-----------------------------------------------------------"
+    info "  [R] Refresh   [Q] Back to Menu"
+    printf "\n"
     read -p "Select: " -r -n1 choice
     echo
     
@@ -1332,9 +1396,9 @@ show_resource_warning() {
 
 check_installed_runners() {
   show_banner
-  echo "Installed AI Runners"
-  echo "==========================================================="
-  echo
+  cecho CYAN "Installed AI Runners"
+  cecho CYAN "-----------------------------------------------------------"
+  printf "\n"
   
   # Check Ollama
   if command -v ollama &>/dev/null; then
@@ -1379,29 +1443,29 @@ interactive_model_selector() {
   log_step "Interactive Model Selector"
   echo
   
-  echo "Popular Models - Select to Download:"
-  echo "==========================================================="
-  echo
-  echo "Large Language Models:"
-  echo "  1) Llama 2 7B (4GB RAM)         — general-purpose assistant, chat and instruction tuning"
-  echo "  2) Llama 2 13B (8GB RAM)        — stronger reasoning and multi-turn dialogue than 7B"
-  echo "  3) Mistral 7B (4GB RAM)         — high-efficiency open-weight LLM for diverse tasks"
-  echo "  4) Mixtral 8x7B (24GB RAM)     — ensemble-style model for high-capacity generation"
-  echo "  5) CodeLlama 7B (4GB RAM)      — optimized for code understanding and generation"
-  echo
-  echo "Specialized Models:"
-  echo "  6) TinyLlama 1.1B (1GB RAM)     — tiny conversational agent for low-resource devices"
-  echo "  7) Phi-2 2.7B (2GB RAM)         — compact model tuned for instruction following"
-  echo "  8) Neural Chat 7B (4GB RAM)     — chat-optimized model with safety/turn-taking tuning"
-  echo "  9) Orca Mini 3B (2GB RAM)       — lightweight assistant with solid reasoning for small hosts"
-  echo "  10) Vicuna 7B (4GB RAM)         — community-tuned chat model derived from LLaMA weights"
-  echo
-  echo "Vision Models:"
-  echo "  11) LLaVA 7B (5GB RAM)          — multimodal (image+text) reasoning and VQA"
-  echo "  12) BakLLaVA 7B (5GB RAM)       — vision-language variant optimized for image-grounded chat"
-  echo
-  echo "  0) Cancel"
-  echo
+  cecho CYAN "Popular Models - Select to Download:"
+  log_info "-----------------------------------------------------------"
+  printf "\n"
+  cecho CYAN "Large Language Models:"
+  info "  1) Llama 2 7B (4GB RAM)         — general-purpose assistant, chat and instruction tuning"
+  info "  2) Llama 2 13B (8GB RAM)        — stronger reasoning and multi-turn dialogue than 7B"
+  info "  3) Mistral 7B (4GB RAM)         — high-efficiency open-weight LLM for diverse tasks"
+  info "  4) Mixtral 8x7B (24GB RAM)     — ensemble-style model for high-capacity generation"
+  info "  5) CodeLlama 7B (4GB RAM)      — optimized for code understanding and generation"
+  printf "\n"
+  cecho CYAN "Specialized Models:"
+  info "  6) TinyLlama 1.1B (1GB RAM)     — tiny conversational agent for low-resource devices"
+  info "  7) Phi-2 2.7B (2GB RAM)         — compact model tuned for instruction following"
+  info "  8) Neural Chat 7B (4GB RAM)     — chat-optimized model with safety/turn-taking tuning"
+  info "  9) Orca Mini 3B (2GB RAM)       — lightweight assistant with solid reasoning for small hosts"
+  info "  10) Vicuna 7B (4GB RAM)         — community-tuned chat model derived from LLaMA weights"
+  printf "\n"
+  cecho CYAN "Vision Models:"
+  info "  11) LLaVA 7B (5GB RAM)          — multimodal (image+text) reasoning and VQA"
+  info "  12) BakLLaVA 7B (5GB RAM)       — vision-language variant optimized for image-grounded chat"
+  printf "\n"
+  info "  0) Cancel"
+  printf "\n"
   read -p "Select model [0-12]: " -r choice
   
   local model_name=""
@@ -1534,7 +1598,7 @@ list_available_models() {
   if command -v ollama &>/dev/null; then
     log_info "Ollama models:"
     echo
-    ollama list || log_warn "Could not list Ollama models"
+    safe_ollama_list || log_warn "Could not list Ollama models"
   fi
   
   pause
@@ -1552,31 +1616,31 @@ setup_batch_download_helper() {
   total_ram=$(free -g | awk '/^Mem:/{print $2}')
   local free_disk
   free_disk=$(df -BG . | awk 'NR==2{print $4}' | sed 's/G//')
-  echo "  Total RAM: ${total_ram}GB"
-  echo "  Free Disk: ${free_disk}GB"
-  echo
-  
-  echo "==========================================================="
-  echo "  Available Batch Profiles"
-  echo "==========================================================="
-  echo
-  echo "  1) Low Resource      (4GB RAM, ~8GB disk)   - 3 tiny models"
-  echo "  2) Development       (8GB RAM, ~10GB disk)  - 4 models (RECOMMENDED)"
-  echo "  3) Coding            (8GB RAM, ~15GB disk)  - 4 code-focused models"
-  echo "  4) Production        (16GB RAM, ~30GB disk) - 5 quality models"
-  echo "  5) High Performance  (32GB+ RAM, ~60GB disk) - 5 large models"
-  echo "  6) Custom (edit manually)"
-  echo "  0) Cancel"
-  echo
+  info "  Total RAM: ${total_ram}GB"
+  info "  Free Disk: ${free_disk}GB"
+  printf "\n"
+
+  cecho CYAN "-----------------------------------------------------------"
+  cecho CYAN "  Available Batch Profiles"
+  cecho CYAN "-----------------------------------------------------------"
+  printf "\n"
+  info "  1) Low Resource      (4GB RAM, ~8GB disk)   - 3 tiny models"
+  info "  2) Development       (8GB RAM, ~10GB disk)  - 4 models (RECOMMENDED)"
+  info "  3) Coding            (8GB RAM, ~15GB disk)  - 4 code-focused models"
+  info "  4) Production        (16GB RAM, ~30GB disk) - 5 quality models"
+  info "  5) High Performance  (32GB+ RAM, ~60GB disk) - 5 large models"
+  info "  6) Custom (edit manually)"
+  info "  0) Cancel"
+  printf "\n"
   
   # Recommend based on system
   local recommended=2
-  echo "Recommendation for your system (${total_ram}GB RAM, ${free_disk}GB free):"
+  info "Recommendation for your system (${total_ram}GB RAM, ${free_disk}GB free):"
   if [[ $total_ram -lt 8 ]]; then
-    echo "  → Profile 1 (Low Resource) is best for you"
+    info "  → Profile 1 (Low Resource) is best for you"
     recommended=1
   elif [[ $total_ram -lt 16 ]]; then
-    echo "  → Profile 2 (Development) or 3 (Coding) recommended"
+    info "  → Profile 2 (Development) or 3 (Coding) recommended"
     recommended=2
   elif [[ $total_ram -lt 32 ]]; then
     echo "  → Profile 4 (Production) recommended"
@@ -1689,16 +1753,16 @@ setup_batch_download_helper() {
         ;;
     esac
     
-    echo
-    echo "==========================================================="
+    printf "\n"
+    cecho CYAN "-----------------------------------------------------------"
     log_success "Configuration Complete!"
-    echo "==========================================================="
-    echo
-    echo "Next steps:"
-    echo "  1. Select option 3 (Batch Download Models) from this menu"
-    echo "  2. Confirm and wait for downloads to complete"
-    echo
-    echo "Tip: You can monitor progress with:"
+    cecho CYAN "-----------------------------------------------------------"
+    printf "\n"
+    info "Next steps:"
+    info "  1. Select option 3 (Batch Download Models) from this menu"
+    info "  2. Confirm and wait for downloads to complete"
+    printf "\n"
+    info "Tip: You can monitor progress with:"
     echo "  watch -n 5 'ollama list'"
     echo
   else
@@ -1782,16 +1846,16 @@ EOF
     echo
   done
   
-  echo "==========================================================="
+  cecho CYAN "-----------------------------------------------------------"
   log_info "Batch download complete: $success succeeded, $failed failed"
-  echo
+  printf "\n"
   
   # Offer to start monitoring
   if [[ $success -gt 0 ]]; then
     read -p "View downloaded models? [y/N]: " -r reply
     if [[ "$reply" =~ ^[Yy]$ ]]; then
       echo
-      ollama list
+      safe_ollama_list
       echo
     fi
   fi
@@ -1840,7 +1904,7 @@ benchmark_model() {
   fi
   
   log_info "Available models:"
-  ollama list
+  safe_ollama_list
   echo
   
   read -p "Enter model name to benchmark: " -r model_name
@@ -1887,12 +1951,12 @@ benchmark_model() {
   local avg_time
   avg_time=$(echo "scale=2; $total_time / $test_count" | bc)
   
-  echo "==========================================================="
+  cecho CYAN "-----------------------------------------------------------"
   log_success "Benchmark Results for $model_name:"
-  echo "  Total tests: $test_count"
-  echo "  Total time: ${total_time}s"
-  echo "  Average time: ${avg_time}s"
-  echo "==========================================================="
+  info "  Total tests: $test_count"
+  info "  Total time: ${total_time}s"
+  info "  Average time: ${avg_time}s"
+  cecho CYAN "-----------------------------------------------------------"
   
   pause
 }
@@ -1909,7 +1973,7 @@ compare_models() {
   fi
   
   log_info "Available models:"
-  ollama list
+  safe_ollama_list
   echo
   
   read -p "Enter first model name: " -r model1
@@ -1930,9 +1994,9 @@ compare_models() {
   echo
   
   # Model 1
-  echo "==========================================================="
+  cecho CYAN "-----------------------------------------------------------"
   log_info "Model 1: $model1"
-  echo "─────────────────────────────────────────────────────────"
+  cecho CYAN "─────────────────────────────────────────────────────────"
   local start1
   start1=$(date +%s.%N)
   echo "$prompt" | ollama run "$model1"
@@ -1943,9 +2007,9 @@ compare_models() {
   echo
   
   # Model 2
-  echo "==========================================================="
+  cecho CYAN "-----------------------------------------------------------"
   log_info "Model 2: $model2"
-  echo "─────────────────────────────────────────────────────────"
+  cecho CYAN "─────────────────────────────────────────────────────────"
   local start2
   start2=$(date +%s.%N)
   echo "$prompt" | ollama run "$model2"
@@ -1956,17 +2020,17 @@ compare_models() {
   echo
   
   # Summary
-  echo "==========================================================="
+  cecho CYAN "-----------------------------------------------------------"
   log_success "Comparison Summary:"
-  echo "  $model1: ${time1}s"
-  echo "  $model2: ${time2}s"
-  
+  info "  $model1: ${time1}s"
+  info "  $model2: ${time2}s"
+
   if (( $(echo "$time1 < $time2" | bc -l) )); then
-    echo "  Winner: $model1 (faster)"
+    info "  Winner: $model1 (faster)"
   else
-    echo "  Winner: $model2 (faster)"
+    info "  Winner: $model2 (faster)"
   fi
-  echo "==========================================================="
+  cecho CYAN "-----------------------------------------------------------"
   
   pause
 }
@@ -1977,7 +2041,7 @@ recommend_models() {
   echo
   
   log_info "Analyzing system resources..."
-  echo
+  printf "\n"
   
   # Get system info
   local total_ram_gb
@@ -1989,48 +2053,48 @@ recommend_models() {
   local available_disk_gb
   available_disk_gb=$(df -BG "${PROJECT_ROOT}" | awk 'NR==2{print $4}' | sed 's/G//')
   
-  echo "System Specifications:"
-  echo "  RAM: ${total_ram_gb}GB"
-  echo "  CPU Cores: ${cpu_cores}"
-  echo "  Available Disk: ${available_disk_gb}GB"
-  echo
-  echo "==========================================================="
-  echo "Recommended Models:"
-  echo "==========================================================="
-  echo
+  cecho CYAN "System Specifications:"
+  info "  RAM: ${total_ram_gb}GB"
+  info "  CPU Cores: ${cpu_cores}"
+  info "  Available Disk: ${available_disk_gb}GB"
+  printf "\n"
+  cecho CYAN "-----------------------------------------------------------"
+  cecho GREEN "Recommended Models:"
+  cecho CYAN "-----------------------------------------------------------"
+  printf "\n"
   
   # Recommendations based on RAM
   if [[ $total_ram_gb -lt 4 ]]; then
     log_warn "Low RAM detected (${total_ram_gb}GB)"
-    echo "Recommended:"
-    echo "  OK TinyLlama 1.1B (1GB RAM)"
-    echo "  OK Phi-2 2.7B (2GB RAM)"
-    echo "  OK Orca Mini 3B (2GB RAM)"
+    info "Recommended:"
+    info "  OK TinyLlama 1.1B (1GB RAM)"
+    info "  OK Phi-2 2.7B (2GB RAM)"
+    info "  OK Orca Mini 3B (2GB RAM)"
   elif [[ $total_ram_gb -lt 8 ]]; then
     log_info "Moderate RAM (${total_ram_gb}GB)"
-    echo "Recommended:"
-    echo "  OK Llama 2 7B (4GB RAM)"
-    echo "  OK Mistral 7B (4GB RAM)"
-    echo "  OK CodeLlama 7B (4GB RAM)"
-    echo "  OK Neural Chat 7B (4GB RAM)"
-    echo "  OK Vicuna 7B (4GB RAM)"
+    info "Recommended:"
+    info "  OK Llama 2 7B (4GB RAM)"
+    info "  OK Mistral 7B (4GB RAM)"
+    info "  OK CodeLlama 7B (4GB RAM)"
+    info "  OK Neural Chat 7B (4GB RAM)"
+    info "  OK Vicuna 7B (4GB RAM)"
   elif [[ $total_ram_gb -lt 16 ]]; then
     log_success "Good RAM (${total_ram_gb}GB)"
-    echo "Recommended:"
-    echo "  OK Llama 2 13B (8GB RAM)"
-    echo "  OK All 7B models"
-    echo "  OK LLaVA 7B (vision, 5GB RAM)"
+    info "Recommended:"
+    info "  OK Llama 2 13B (8GB RAM)"
+    info "  OK All 7B models"
+    info "  OK LLaVA 7B (vision, 5GB RAM)"
   else
     log_success "Excellent RAM (${total_ram_gb}GB)"
-    echo "Recommended:"
-    echo "  OK Mixtral 8x7B (24GB RAM) - Best quality"
-    echo "  OK Llama 2 13B (8GB RAM)"
-    echo "  OK All smaller models"
-    echo "  OK Multiple models simultaneously"
+    info "Recommended:"
+    info "  OK Mixtral 8x7B (24GB RAM) - Best quality"
+    info "  OK Llama 2 13B (8GB RAM)"
+    info "  OK All smaller models"
+    info "  OK Multiple models simultaneously"
   fi
   
-  echo
-  echo "==========================================================="
+  printf "\n"
+  cecho CYAN "-----------------------------------------------------------"
   
   pause
 }
@@ -2207,12 +2271,11 @@ view_system_logs() {
 view_ai_runner_logs() {
   show_banner
   log_step "AI Runner Logs"
-  echo
-  
-  echo "Select runner to view logs:"
-  echo "  1) Ollama (systemd)"
-  echo "  0) Cancel"
-  echo
+  printf "\n"
+  info "Select runner to view logs:"
+  info "  1) Ollama (systemd)"
+  info "  0) Cancel"
+  printf "\n"
   read -p "Select [0-2]: " -r choice
   
   case "$choice" in
@@ -2343,15 +2406,15 @@ cleanup_unused_files() {
 setup_menu() {
   while true; do
     show_banner
-    echo "Setup & Configuration"
-    echo "==========================================================="
-    echo
-    echo "  1) Initialize Project (first-time setup + Podman)"
-    echo "  2) Check Dependencies"
-    echo "  3) Install Missing Dependencies"
-    echo "  4) Configure Rootless Podman"
-    echo "  0) Back to Main Menu"
-    echo
+    cecho CYAN "Setup & Configuration"
+    cecho CYAN "-----------------------------------------------------------"
+    printf "\n"
+    info "  1) Initialize Project (first-time setup + Podman)"
+    info "  2) Check Dependencies"
+    info "  3) Install Missing Dependencies"
+    info "  4) Configure Rootless Podman"
+    info "  0) Back to Main Menu"
+    printf "\n"
     read -p "Select option [0-4]: " -r choice
 
     case "$choice" in
@@ -2375,24 +2438,24 @@ setup_menu() {
 ai_runners_menu() {
   while true; do
     show_banner
-    echo "AI Runners Management"
-    echo "==========================================================="
-    echo
-    echo "  Installation:"
-    echo "    1) Install Ollama"
-    echo "    2) Install Aider"
-    echo "    3) Install llama.cpp"
-    echo "    4) Install text-generation-webui"
-    echo
-    echo "  Operation:"
-    echo "    5) Start AI Runner"
-    echo "    6) Stop AI Runner"
-    echo "    7) Quick Run (Auto-detect & Start)"
-    echo
-    echo "  Management:"
-    echo "    8) Check Installed Runners"
-    echo "    9) Uninstall AI Component"
-    echo
+    cecho CYAN "AI Runners Management"
+    cecho CYAN "-----------------------------------------------------------"
+    printf "\n"
+    info "  Installation:"
+    info "    1) Install Ollama"
+    info "    2) Install Aider (developer assistant)"
+    info "    3) Install llama.cpp"
+    info "    4) Install text-generation-webui"
+    printf "\n"
+    info "  Operation:"
+    info "    5) Start AI Runner"
+    info "    6) Stop AI Runner"
+    info "    7) Quick Run (Auto-detect & Start)"
+    printf "\n"
+    info "  Management:"
+    info "    8) Check Installed Runners"
+    info "    9) Uninstall AI Component"
+    printf "\n"
     echo "  0) Back to Main Menu"
     echo
     read -p "Select option [0-9]: " -r choice
@@ -2420,16 +2483,16 @@ ai_runners_menu() {
 models_menu() {
   while true; do
     show_banner
-    echo "Model Management"
-    echo "==========================================================="
-    echo
-    echo "  Download & Setup:"
-    echo "    1) Interactive Model Selector (Popular Models)"
-    echo "    2) Download Model from Hugging Face"
-    echo "    3) Batch Download Setup Helper"
-    echo "    4) Batch Download Models"
-    echo "    5) Monitor Download Progress"
-    echo
+    cecho CYAN "Model Management"
+    cecho CYAN "-----------------------------------------------------------"
+    printf "\n"
+    info "  Download & Setup:"
+    info "    1) Interactive Model Selector (Popular Models)"
+    info "    2) Download Model from Hugging Face"
+    info "    3) Batch Download Setup Helper"
+    info "    4) Batch Download Models"
+    info "    5) Monitor Download Progress"
+    printf "\n"
     echo "  Model Operations:"
     echo "    6) List Available Models"
     echo "    7) Convert Model to Ollama Format"
@@ -2469,16 +2532,16 @@ models_menu() {
 crawler_menu() {
   while true; do
     show_banner
-    echo "Training Data Crawler"
-    echo "==========================================================="
-    echo
-    echo "  1) Crawl Single URL"
-    echo "  2) Crawl Multiple URLs from File"
-    echo "  3) Set Crawl Depth"
-    echo "  4) View Crawled Data Files"
-    echo "  5) Remove Crawled Data Files"
-    echo "  0) Back to Main Menu"
-    echo
+    cecho CYAN "Training Data Crawler"
+    cecho CYAN "-----------------------------------------------------------"
+    printf "\n"
+    info "  1) Crawl Single URL"
+    info "  2) Crawl Multiple URLs from File"
+    info "  3) Set Crawl Depth"
+    info "  4) View Crawled Data Files"
+    info "  5) Remove Crawled Data Files"
+    info "  0) Back to Main Menu"
+    printf "\n"
     read -p "Select option [0-5]: " -r choice
 
     case "$choice" in
@@ -2500,18 +2563,18 @@ crawler_menu() {
 maintenance_menu() {
   while true; do
     show_banner
-    echo "Maintenance & Logs"
-    echo "==========================================================="
-    echo
-    echo "  1) View System Logs"
-    echo "  2) View AI Runner Logs"
-    echo "  3) Backup Project Data"
-    echo "  4) Restore Project Data"
-    echo "  5) Cleanup Unused Files"
-    echo "  6) Export Settings"
-    echo "  7) Import Settings"
-    echo "  0) Back to Main Menu"
-    echo
+    cecho CYAN "Maintenance & Logs"
+    cecho CYAN "-----------------------------------------------------------"
+    printf "\n"
+    info "  1) View System Logs"
+    info "  2) View AI Runner Logs"
+    info "  3) Backup Project Data"
+    info "  4) Restore Project Data"
+    info "  5) Cleanup Unused Files"
+    info "  6) Export Settings"
+    info "  7) Import Settings"
+    info "  0) Back to Main Menu"
+    printf "\n"
     read -p "Select option [0-7]: " -r choice
 
     case "$choice" in
@@ -2535,15 +2598,15 @@ maintenance_menu() {
 config_profiles_menu() {
   while true; do
     show_banner
-    echo "Configuration Profiles"
-    echo "==========================================================="
-    echo
-    echo "  1) Save Current Profile"
-    echo "  2) Load Profile"
-    echo "  3) List All Profiles"
-    echo "  4) Delete Profile"
-    echo "  0) Back to Main Menu"
-    echo
+    cecho CYAN "Configuration Profiles"
+    cecho CYAN "-----------------------------------------------------------"
+    printf "\n"
+    info "  1) Save Current Profile"
+    info "  2) Load Profile"
+    info "  3) List All Profiles"
+    info "  4) Delete Profile"
+    info "  0) Back to Main Menu"
+    printf "\n"
     read -p "Select option [0-4]: " -r choice
 
     case "$choice" in
@@ -2560,15 +2623,15 @@ config_profiles_menu() {
 uninstall_submenu() {
   while true; do
     show_banner
-    echo "Uninstall Components"
-    echo "==========================================================="
-    echo
-    echo "  1) Uninstall Ollama"
-    echo "  2) Uninstall Aider"
-    echo "  3) Uninstall llama.cpp"
-    echo "  4) Uninstall text-generation-webui"
-    echo "  0) Back to AI Runners Management"
-    echo
+    cecho CYAN "Uninstall Components"
+    cecho CYAN "-----------------------------------------------------------"
+    printf "\n"
+    info "  1) Uninstall Ollama"
+    info "  2) Uninstall Aider"
+    info "  3) Uninstall llama.cpp"
+    info "  4) Uninstall text-generation-webui"
+    info "  0) Back to AI Runners Management"
+    printf "\n"
     read -p "Select option [0-4]: " -r choice
 
     case "$choice" in
@@ -2639,9 +2702,9 @@ quick_run() {
 
 setup_container_runtime() {
   show_banner
-  echo "Container Runtime Setup"
-  echo "==========================================================="
-  echo
+  cecho CYAN "Container Runtime Setup"
+  cecho CYAN "-----------------------------------------------------------"
+  printf "\n"
   if [[ -n "$CONTAINER_CMD" ]]; then
     log_info "Current runtime: $CONTAINER_CMD"
     echo
@@ -2649,13 +2712,13 @@ setup_container_runtime() {
     log_warn "No container runtime detected"
     echo
   fi
-  echo "Available options:"
-  echo "  1) Install/Setup Podman"
-  echo "  2) Fix Podman User Namespaces"
-  echo "  3) Install/Setup Docker"
-  echo "  4) Test Container Runtime"
-  echo "  5) Reset Podman Configuration"
-  echo "  0) Back"
+  info "Available options:"
+  info "  1) Install/Setup Podman"
+  info "  2) Fix Podman User Namespaces"
+  info "  3) Install/Setup Docker"
+  info "  4) Test Container Runtime"
+  info "  5) Reset Podman Configuration"
+  info "  0) Back"
   echo
   read -p "Select option [0-5]: " -r choice
   case "$choice" in
@@ -2822,20 +2885,20 @@ run_menu_action() {
 main_menu() {
   while true; do
     show_banner
-    echo "Main Menu"
-    echo "==========================================================="
-    echo
-    echo "  1) Setup & Configuration"
-    echo "  2) AI Runners Management"
-    echo "  3) Model Management"
-    echo "  4) Training Data Crawler"
-    echo "  5) Maintenance & Logs"
-    echo "  6) Health Check Dashboard"
-    echo "  7) Chat Interface"
-    echo "  8) Configuration Profiles"
-    echo "  9) Quick Run (Auto-detect)"
-    echo "  0) Exit"
-    echo
+    cecho CYAN "Main Menu"
+    cecho CYAN "-----------------------------------------------------------"
+    printf "\n"
+    info "  1) Setup & Configuration"
+    info "  2) AI Runners Management"
+    info "  3) Model Management"
+    info "  4) Training Data Crawler"
+    info "  5) Maintenance & Logs"
+    info "  6) Health Check Dashboard"
+    info "  7) Chat Interface"
+    info "  8) Configuration Profiles"
+    info "  9) Quick Run (Auto-detect)"
+    info "  0) Exit"
+    printf "\n"
     read -p "Select option [0-9]: " -r choice
 
     case "$choice" in

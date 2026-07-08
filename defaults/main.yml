@@ -1,0 +1,4 @@
+---
+ollamatrauma_ai_runner_and_llm_use_local_defaults_env: true
+ollamatrauma_ai_runner_and_llm_defaults_env_file: "{{ playbook_dir | dirname }}/defaults/env.yml"
+ollamatrauma_ai_runner_and_llm_local_defaults_precedence: "noninteractive"

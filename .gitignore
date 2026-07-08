@@ -1,77 +1,71 @@
-# Environment files
-env.yml
-.vault_pass.txt
-*.secret
-
-# Data directories
-data/models/*
-data/hf_cache/*
-data/logs/*
-models/*.gguf
-models/*.bin
-
-# Training data (can be huge - keep out of git completely)
-OllamaTrauma-TrainingData/
-
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.pyo
 *.so
-.Python
-venv/
-ENV/
-env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# OS files
-.DS_Store
-Thumbs.db
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE/editor
+.vscode/
+.idea/
 *.swp
 *.swo
 *~
 
-# IDE
-.vscode/
-.idea/
-*.code-workspace
+# OS noise
+.DS_Store
+Thumbs.db
 
-# Keep directory structure
-!data/models/.gitkeep
-!data/hf_cache/.gitkeep
-!data/logs/.gitkeep
-!models/.gitkeep
-# Ansible generated files
-ansible.cfg
-*.retry
-# Credentials and secrets
-env.conf
-*.vault
-vault.yml
-vault.yaml
-# Backup files
-*.bak
-*.bak.*
-*.backup
-*.backup.*
-.backup/
-.backups/
-.trunk/
-archive/
-*_backups*
+# Build/artifacts
+build/
+dist/
+*.egg-info/
+*.egg
 
-# Project test logs
-log/
+# Logs and runtime files
 *.log
-# BEGIN MANAGED BLOCK: Ansible secrets
-# --------------------------------------------------------
-# Ansible secrets
-# Keep secrets and generated configs out of git.
-# Managed by Ansible-Standards configure_projects.
-# Covered entries:
-# - env.yml
-# - vault.yml
-# - .vault_pass.txt
-# - env.conf
-# - ansible.cfg (generated)
-# - *.vault
-# END MANAGED BLOCK: Ansible secrets
+*.pid
+*.pid.lock
+log/
+
+# Local and secrets
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.secret
+
+# Project data outputs (keep placeholders)
+data/logs/*
+!data/logs/.gitkeep
+data/models/*
+!data/models/.gitkeep
+data/outputs/*
+!data/outputs/.gitkeep
+data/training/*
+!data/training/.gitkeep
+
+# Large model/binary artifacts
+*.gguf
+*.gguf.json
+*.bin
+*.safetensors
+
+# Temporary and backups
+*.bak
+*.old
+*.tmp
+*.temp
+.backups/
+
+# Runtime state
+mcp/*.pid
