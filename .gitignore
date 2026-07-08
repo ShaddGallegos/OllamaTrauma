@@ -1077,3 +1077,4 @@ zdnn.h
 !local/vars/external_inventory/host_vars/README.md
 !package.json
 !peg-parser
+scripts/ocm/ocm
