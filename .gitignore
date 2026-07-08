@@ -69,3 +69,26 @@ data/training/*
 
 # Runtime state
 mcp/*.pid
+
+# Artifact hygiene (keep generated binaries/archives/logs/backups out of git)
+*.tar
+*.tgz
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.iso
+*.img
+*.qcow2
+*.vmdk
+*.ova
+*.bin
+*.deb
+*.rpm
+*.zip
+*.7z
+*.rar
+*.log
+*.bak
+*.backup
+*.old
+/tmp/project-artifacts/
